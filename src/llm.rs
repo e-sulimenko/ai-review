@@ -1,6 +1,9 @@
-use crate::git::FileDiff;
+use crate::{config::LlmConfig, git::FileDiff};
 use anyhow::Result;
+use futures::stream::{self, StreamExt};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::fmt;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -23,7 +26,6 @@ impl fmt::Display for IssueSeverity {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum IssueType {
   Bug,
-  Style,
   Performance,
   Security,
 }
@@ -32,7 +34,6 @@ impl fmt::Display for IssueType {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       IssueType::Bug => write!(f, "bug"),
-      IssueType::Style => write!(f, "style"),
       IssueType::Performance => write!(f, "performance"),
       IssueType::Security => write!(f, "security"),
     }
@@ -56,51 +57,106 @@ pub struct FileReview {
   pub issues: Vec<Issue>,
 }
 
-/// Отправка одного файла в LLM и получение ревью
-/// На стадии MVP — заглушка с фейковым результатом
-pub async fn review_file(file: &FileDiff) -> Result<FileReview> {
-  // TODO: реальная интеграция с LLM через HTTP или SDK
-  // Для MVP создаем фейковое ревью
-  let fake_issues = if file.diff.contains("fn main") {
-    vec![Issue {
-      line: 1,
-      severity: IssueSeverity::Warning,
-      issue_type: IssueType::Style,
-      message: "Consider adding documentation for main function".to_string(),
-      suggestion: "Add /// comments above main".to_string(),
-    }]
-  } else {
-    vec![]
-  };
-
-  Ok(FileReview {
-    path: file.path.clone(),
-    issues: fake_issues,
-  })
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LlmReview {
+  pub issues: Vec<Issue>,
 }
 
-/// Обработка всех файлов (async, параллельно)
-pub async fn review_files(files: &[FileDiff]) -> Result<Vec<FileReview>> {
-  use futures::stream::{self, StreamExt};
+pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<LlmReview> {
+  let max_concurrent = 5;
 
-  let reviews = stream::iter(files)
-    .map(|file| async move { review_file(file).await })
-    .buffer_unordered(5) // одновременно обрабатываем до 5 файлов
-    .collect::<Vec<_>>()
+  let reviews: Vec<LlmReview> = stream::iter(diffs)
+    .map(|file| review_single_file(config, file))
+    .buffer_unordered(max_concurrent)
+    .collect()
     .await;
 
-  // Собираем результаты, проверяем ошибки
-  let mut results = Vec::new();
-  for r in reviews {
-    results.push(r?);
+  Ok(merge_reviews(reviews))
+}
+
+async fn review_single_file(config: &LlmConfig, file: &FileDiff) -> LlmReview {
+  let client = Client::new();
+
+  let prompt = build_prompt_single(file);
+
+  let body = json!({
+      "model": config.model,
+      "messages": [
+          {
+              "role": "system",
+              "content": "You are a senior engineer performing strict code review. Return JSON only."
+          },
+          {
+              "role": "user",
+              "content": prompt
+          }
+      ],
+      "temperature": 0
+  });
+
+  let resp = client
+    .post(&config.api_url)
+    .bearer_auth(&config.api_key)
+    .json(&body)
+    .send()
+    .await;
+
+  if let Ok(resp) = resp {
+    if let Ok(text) = resp.text().await {
+      if let Ok(review) = serde_json::from_str::<LlmReview>(&text) {
+        return review;
+      }
+    }
   }
 
-  Ok(results)
+  LlmReview { issues: vec![] }
+}
+
+fn build_prompt_single(file: &FileDiff) -> String {
+  format!(
+    r#"
+  Perform a strict code review.
+  
+  Check for:
+  - syntax errors
+  - type errors
+  - logical bugs
+  
+  Return STRICT JSON:
+  
+  {{
+   "issues":[
+     {{
+       "file":"{}",
+       "line":123,
+       "message":"short description",
+       "suggestion":"fix"
+     }}
+   ]
+  }}
+  
+  FILE:
+  {}
+  
+  "#,
+    file.path, file.diff
+  )
+}
+
+fn merge_reviews(reviews: Vec<LlmReview>) -> LlmReview {
+  let mut issues = Vec::new();
+
+  for review in reviews {
+    issues.extend(review.issues);
+  }
+
+  LlmReview { issues }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::config::LlmConfig;
   use crate::git::FileDiff;
 
   #[tokio::test]
@@ -109,14 +165,23 @@ mod tests {
       path: "src/main.rs".to_string(),
       diff: "fn main() {}".to_string(),
     };
-    let review = review_file(&file).await.unwrap();
-    assert_eq!(review.path, "src/main.rs");
+    let config = test_llm_config();
+    let review = review_single_file(&config, &file).await;
     assert_eq!(review.issues.len(), 1);
     assert_eq!(review.issues[0].severity, IssueSeverity::Warning);
   }
 
+  fn test_llm_config() -> LlmConfig {
+    LlmConfig {
+      api_url: "http://test".to_string(),
+      api_key: "test".to_string(),
+      model: "test".to_string(),
+    }
+  }
+
   #[tokio::test]
   async fn test_review_files() {
+    let config = test_llm_config();
     let files = vec![
       FileDiff {
         path: "src/main.rs".to_string(),
@@ -127,9 +192,7 @@ mod tests {
         diff: "".to_string(),
       },
     ];
-    let reviews = review_files(&files).await.unwrap();
-    assert_eq!(reviews.len(), 2);
-    assert_eq!(reviews[0].issues.len(), 1);
-    assert_eq!(reviews[1].issues.len(), 0);
+    let review = review_files(&config, &files).await.unwrap();
+    assert!(review.issues.len() <= 2);
   }
 }

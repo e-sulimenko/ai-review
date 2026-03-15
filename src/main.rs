@@ -5,11 +5,15 @@ mod llm;
 mod review;
 mod output;
 mod cli;
+mod config;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Парсим CLI через отдельный модуль
     let cli = cli::parse_cli();
+
+    // Загружаем конфиг
+    let config = config::load_config()?;
 
     let branch = match &cli.branch {
         Some(b) => b.clone(),
@@ -24,7 +28,7 @@ async fn main() -> Result<()> {
     }
 
     // Отправляем файлы в LLM (MVP — фейковый ревью)
-    let reviews = llm::review_files(&file_diffs).await?;
+    let reviews = llm::review_files(&config.llm, &file_diffs).await?;
 
     // Агрегируем ревью
     let summary = review::aggregate_reviews(&file_diffs, reviews);
