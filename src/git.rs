@@ -16,16 +16,18 @@ pub struct FileDiff {
 }
 
 /// Получаем все файлы для ревью
-pub fn get_diff() -> Result<Vec<FileDiff>> {
-  // Обновляем origin/main
-  Command::new("git")
-    .args(&["fetch", "origin", "main"])
-    .status()
-    .context("Failed to fetch origin/main")?;
+pub fn get_diff(branch: &str, fetch: bool) -> Result<Vec<FileDiff>> {
+  if fetch {
+    // Обновляем origin/main
+    Command::new("git")
+      .args(&["fetch", "origin", branch])
+      .status()
+      .context(format!("Failed to fetch {}", branch))?;
+  }
 
   // Получаем diff по существующим файлам
   let output = Command::new("git")
-    .args(&["diff", "origin/main", "-U20"])
+    .args(&["diff", branch, "-U20"])
     .output()
     .context("Failed to run git diff")?;
 
@@ -115,6 +117,21 @@ fn parse_diff(diff_text: &str) -> Vec<FileDiff> {
   }
 
   files
+}
+
+/// Получаем имя текущей локальной ветки
+pub fn current_branch() -> Result<String> {
+  let output = Command::new("git")
+      .args(&["rev-parse", "--abbrev-ref", "HEAD"])
+      .output()
+      .context("Failed to get current branch")?;
+
+  if !output.status.success() {
+      anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&output.stderr));
+  }
+
+  let branch = String::from_utf8(output.stdout)?.trim().to_string();
+  Ok(branch)
 }
 
 /// Проверка расширения файла
