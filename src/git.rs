@@ -1,32 +1,31 @@
 use anyhow::{Context, Result};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::fs;
 
-/// Поддерживаемые расширения файлов
 const SUPPORTED_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx"];
-
-/// Игнорируемые директории
 const IGNORED_DIRS: &[&str] = &["node_modules", "dist", "build", "target", ".git"];
 
-/// Структура для хранения diff по файлу
+// Порог для маленького diff — если diff < N строк, отправляем весь файл
+const DIFF_THRESHOLD: usize = 10;
+
 #[derive(Debug, Clone)]
 pub struct FileDiff {
   pub path: String,
-  pub diff: String,
+  pub diff: String, // может быть diff или весь файл
 }
 
-/// Получение diff относительно origin/main
+/// Получаем все файлы для ревью
 pub fn get_diff() -> Result<Vec<FileDiff>> {
   // Обновляем origin/main
-  // Command::new("git")
-  //   .args(&["fetch", "origin", "main"])
-  //   .status()
-  //   .context("Failed to fetch origin/main")?;
+  Command::new("git")
+    .args(&["fetch", "origin", "main"])
+    .status()
+    .context("Failed to fetch origin/main")?;
 
-  // Получаем diff
+  // Получаем diff по существующим файлам
   let output = Command::new("git")
-    .args(&["diff", "master", "-U20"])
+    .args(&["diff", "origin/main", "-U20"])
     .output()
     .context("Failed to run git diff")?;
 
@@ -41,6 +40,18 @@ pub fn get_diff() -> Result<Vec<FileDiff>> {
 
   let mut files = parse_diff(&diff_text);
 
+  // Применяем порог для существующих файлов
+  for file in &mut files {
+    if file.diff.lines().count() < DIFF_THRESHOLD {
+      // Заглушка AST-блока: пока просто весь файл
+      // Позже добавить Tree-sitter для извлечения функции/класса
+      if let Ok(full_content) = fs::read_to_string(&file.path) {
+        file.diff = full_content;
+      }
+    }
+  }
+
+  // Получаем новые (untracked) файлы
   let new_files_output = Command::new("git")
     .args(&["ls-files", "--others", "--exclude-standard"])
     .output()
@@ -51,12 +62,12 @@ pub fn get_diff() -> Result<Vec<FileDiff>> {
       String::from_utf8_lossy(&new_files_output.stderr)
     );
   }
-  
+
   let new_files_text = String::from_utf8(new_files_output.stdout)?;
   for line in new_files_text.lines() {
     let path = line.trim();
     if is_supported(path) && !is_ignored(path) {
-      // читаем содержимое файла как diff
+      // Для новых файлов берём весь файл
       let content = fs::read_to_string(path).unwrap_or_default();
       files.push(FileDiff {
         path: path.to_string(),
@@ -87,11 +98,9 @@ fn parse_diff(diff_text: &str) -> Vec<FileDiff> {
         current_diff.clear();
       }
       current_file = Some(stripped.to_string());
-    } else {
-      if current_file.is_some() {
-        current_diff.push_str(line);
-        current_diff.push('\n');
-      }
+    } else if current_file.is_some() {
+      current_diff.push_str(line);
+      current_diff.push('\n');
     }
   }
 
