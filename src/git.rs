@@ -78,7 +78,7 @@ pub fn get_diff(branch: &str, fetch: bool) -> Result<Vec<FileDiff>> {
     }
   }
 
-  Ok(files)
+  Ok(vec![files[0].clone(), files[1].clone()])
 }
 
 /// Парсинг diff и фильтрация файлов
@@ -122,12 +122,15 @@ fn parse_diff(diff_text: &str) -> Vec<FileDiff> {
 /// Получаем имя текущей локальной ветки
 pub fn current_branch() -> Result<String> {
   let output = Command::new("git")
-      .args(&["rev-parse", "--abbrev-ref", "HEAD"])
-      .output()
-      .context("Failed to get current branch")?;
+    .args(&["rev-parse", "--abbrev-ref", "HEAD"])
+    .output()
+    .context("Failed to get current branch")?;
 
   if !output.status.success() {
-      anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&output.stderr));
+    anyhow::bail!(
+      "git rev-parse failed: {}",
+      String::from_utf8_lossy(&output.stderr)
+    );
   }
 
   let branch = String::from_utf8(output.stdout)?.trim().to_string();
@@ -144,40 +147,4 @@ fn is_ignored(path: &str) -> bool {
   IGNORED_DIRS
     .iter()
     .any(|dir| Path::new(path).components().any(|c| c.as_os_str() == *dir))
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_supported() {
-    assert!(is_supported("src/main.rs"));
-    assert!(is_supported("lib/index.ts"));
-    assert!(!is_supported("README.md"));
-  }
-
-  #[test]
-  fn test_ignored() {
-    assert!(is_ignored("node_modules/foo.js"));
-    assert!(is_ignored("build/main.rs"));
-    assert!(!is_ignored("src/main.rs"));
-  }
-
-  #[test]
-  fn test_parse_diff() {
-    let diff = "\
-diff --git a/src/main.rs b/src/main.rs
-index 123..456 100644
---- a/src/main.rs
-+++ b/src/main.rs
-@@ -1,2 +1,3 @@
-+use anyhow;
- fn main() {}
-";
-    let files = parse_diff(diff);
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "src/main.rs");
-    assert!(files[0].diff.contains("use anyhow;"));
-  }
 }

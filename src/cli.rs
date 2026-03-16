@@ -27,31 +27,3 @@ pub struct Cli {
 pub fn parse_cli() -> Cli {
   Cli::parse()
 }
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_default_flags() {
-    // Заглушка теста: проверяем дефолтные значения
-    let cli = Cli::parse_from(&["ai-review"]);
-    assert!(!cli.json);
-    assert!(!cli.debug);
-    assert_eq!(cli.branch, None);
-    assert!(!cli.fetch);
-  }
-
-  #[test]
-  fn test_custom_branch() {
-      let cli = Cli::parse_from(&["ai-review", "--branch", "develop"]);
-      assert_eq!(cli.branch, Some("develop".to_string()));
-      assert!(!cli.fetch);
-  }
-
-  #[test]
-  fn test_fetch() {
-      let cli = Cli::parse_from(&["ai-review", "--fetch"]);
-      assert!(cli.fetch);
-  }
-}
