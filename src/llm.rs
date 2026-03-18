@@ -38,6 +38,12 @@ pub enum IssueType {
   Style,
   Performance,
   Security,
+  #[serde(rename = "async")]
+  Async,
+  #[serde(rename = "error_handling")]
+  ErrorHandling,
+  #[serde(rename = "dead_code")]
+  DeadCode,
 }
 
 impl fmt::Display for IssueType {
@@ -49,6 +55,9 @@ impl fmt::Display for IssueType {
       IssueType::Style => write!(f, "style"),
       IssueType::Performance => write!(f, "performance"),
       IssueType::Security => write!(f, "security"),
+      IssueType::Async => write!(f, "async"),
+      IssueType::ErrorHandling => write!(f, "error_handling"),
+      IssueType::DeadCode => write!(f, "dead_code"),
     }
   }
 }
@@ -278,7 +287,7 @@ Output schema (JSON only):
 Where each issue object must contain:
 - `line` (positive integer),
 - `severity` ("error"|"warning"|"suggestion"),
-- `issue_type` ("syntax"|"type"|"logic"|"style"|"performance"|"security"),
+- `issue_type` ("syntax"|"type"|"logic"|"style"|"performance"|"security"|"async"|"error_handling"|"dead_code"),
 - `message` (Russian),
 - `suggestion` (Russian),
 - `code_lines` (array of objects, each has `line` (positive integer) and `code` (string); array must be sorted by `line` ascending; must include at least one element with `line` == the issue `line`),
@@ -544,7 +553,7 @@ async fn review_single_file(
                         {{"line":124,"code":"..."}}
                       ],
                       "severity":"suggestion|warning|error",
-                      "issue_type":"syntax|type|logic|style|performance|security"
+                      "issue_type":"syntax|type|logic|style|performance|security|async|error_handling|dead_code"
                     }}
                   ]
                 }}
