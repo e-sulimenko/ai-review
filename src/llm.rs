@@ -4,6 +4,8 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt};
 
+const MAX_RETRY_COUNT: usize = 5;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueSeverity {
@@ -184,74 +186,90 @@ async fn review_single_file(
       },
   });
 
-  println!("Create request for {} file", file.path);
-  let resp = client
-    .post(&config.api_url)
-    .bearer_auth(&config.api_key)
-    .json(&body)
-    .send()
-    .await;
+  let mut last_json_error: Option<String> = None;
 
-  let resp = match resp {
-    Ok(r) => r,
-    Err(e) => {
-      return FileReview {
-        path: file.path.clone(),
-        issues: vec![],
-        errors: vec![format!("API request failed: {}", e)],
-      };
+  for attempt in 0..MAX_RETRY_COUNT {
+    println!(
+      "Create request for {} file (attempt {}/{})",
+      file.path,
+      attempt + 1,
+      MAX_RETRY_COUNT
+    );
+    let resp = client
+      .post(&config.api_url)
+      .bearer_auth(&config.api_key)
+      .json(&body)
+      .send()
+      .await;
+
+    let resp = match resp {
+      Ok(r) => r,
+      Err(e) => {
+        return FileReview {
+          path: file.path.clone(),
+          issues: vec![],
+          errors: vec![format!("API request failed: {}", e)],
+        };
+      }
+    };
+
+    println!("After request for {} file", file.path);
+    let text = match resp.text().await {
+      Ok(t) => t,
+      Err(e) => {
+        return FileReview {
+          path: file.path.clone(),
+          issues: vec![],
+          errors: vec![format!("Failed reading response: {}", e)],
+        };
+      }
+    };
+
+    println!("Got repsonse for {} file", file.path);
+    let json = match extract_json(&text) {
+      Some(j) => j,
+      None => {
+        last_json_error = Some("LLM did not return JSON".into());
+        continue;
+      }
+    };
+
+    let response = match serde_json::from_str::<Response>(&json) {
+      Ok(r) => r,
+      Err(e) => {
+        last_json_error = Some(format!("Invalid JSON (response wrapper): {}", e));
+        continue;
+      }
+    };
+
+    if response.choices.is_empty() {
+      last_json_error = Some("LLM response has empty choices".into());
+      continue;
     }
-  };
 
-  println!("After request for {} file", file.path);
-  let text = match resp.text().await {
-    Ok(t) => t,
-    Err(e) => {
-      return FileReview {
-        path: file.path.clone(),
-        issues: vec![],
-        errors: vec![format!("Failed reading response: {}", e)],
-      };
+    let content = &response.choices[0].message.content;
+    println!("Response for file: {}, content: {:?}", file.path, content);
+
+    match serde_json::from_str::<LlmFileReview>(content) {
+      Ok(r) => {
+        return FileReview {
+          path: file.path.clone(),
+          issues: r.issues,
+          errors: vec![],
+        };
+      }
+      Err(e) => {
+        last_json_error = Some(format!("Invalid JSON (file review): {}", e));
+        continue;
+      }
     }
-  };
+  }
 
-  println!("Got repsonse for {} file", file.path);
-  let json = match extract_json(&text) {
-    Some(j) => j,
-    None => {
-      return FileReview {
-        path: file.path.clone(),
-        issues: vec![],
-        errors: vec!["LLM did not return JSON".into()],
-      };
-    }
-  };
-
-  let response = match serde_json::from_str::<Response>(&json) {
-    Ok(r) => r,
-
-    Err(e) => {
-      return FileReview {
-        path: file.path.clone(),
-        issues: vec![],
-        errors: vec![format!("Invalid JSON: {}", e)],
-      };
-    }
-  };
-
-  println!("Response for file: {}, content: {:?}", file.path, &response.choices[0].message.content);
-  match serde_json::from_str::<LlmFileReview>(&response.choices[0].message.content) {
-      Ok(r) => FileReview {
-      path: file.path.clone(),
-      issues: r.issues,
-      errors: vec![],
-    },
-
-    Err(e) => FileReview {
-      path: file.path.clone(),
-      issues: vec![],
-      errors: vec![format!("Invalid JSON: {}", e)],
-    },
+  FileReview {
+    path: file.path.clone(),
+    issues: vec![],
+    errors: vec![last_json_error
+      .unwrap_or_else(|| "LLM did not return valid JSON".into())],
   }
 }
 
