@@ -53,6 +53,17 @@ impl fmt::Display for IssueType {
   }
 }
 
+/// Одна строка контекста кода вокруг issue.
+///
+/// Контракт для LLM:
+/// - `line` положительный
+/// - `code` не пустой
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodeLine {
+  pub line: usize,
+  pub code: String,
+}
+
 /// Структура одного issue, возвращаемого LLM
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Issue {
@@ -61,9 +72,12 @@ pub struct Issue {
   pub issue_type: IssueType,
   pub message: String,
   pub suggestion: String,
-  /// Контекст кода вокруг `line` (обычно 3 строки: line-1, line, line+1).
-  /// Должен быть включен в ответ LLM, чтобы проблема была привязана к конкретному месту.
-  pub code: String,
+  /// Нумерованный контекст кода вокруг `line`.
+  ///
+  /// Контракт:
+  /// - массив `code_lines` отсортирован по `line` по возрастанию
+  /// - внутри массива обязательно есть элемент с `code_lines[i].line == line`
+  pub code_lines: Vec<CodeLine>,
   pub file: String,
 }
 
@@ -245,7 +259,7 @@ Your goal is to remove semantic duplicates across all candidates.
 Rules:
 - Keep only unique issues after deduplication.
 - Treat issues as duplicates when they refer to the same `line` and the same `issue_type`, and their `message` are semantically equivalent.
-- Merge duplicates by keeping the most specific `message`, the best `suggestion`, and the most representative `code`.
+- Merge duplicates by keeping the most specific `message`, the best `suggestion`, and the most representative `code_lines`.
 - If a candidate has non-empty `errors`, ignore it for deduplication (treat it as having zero issues).
 - Return exactly ONE JSON object (no markdown, no explanations).
 - Suggestions and messages must be in Russian.
@@ -267,7 +281,7 @@ Where each issue object must contain:
 - `issue_type` ("syntax"|"type"|"logic"|"style"|"performance"|"security"),
 - `message` (Russian),
 - `suggestion` (Russian),
-- `code` (string, should contain the relevant code context around the issue line),
+- `code_lines` (array of objects, each has `line` (positive integer) and `code` (string); array must be sorted by `line` ascending; must include at least one element with `line` == the issue `line`),
 - `file` (must equal "{path}").
 "#,
     path = file.path
@@ -377,9 +391,32 @@ Where each issue object must contain:
           "Dedup issue.line must be positive".into(),
         ));
       }
-      if issue.code.trim().is_empty() {
+      if issue.code_lines.is_empty() {
         return Err(DeduplicateAttemptError::ParseOrValidate(
-          "Dedup issue.code must be non-empty".into(),
+          "Dedup issue.code_lines must be non-empty".into(),
+        ));
+      }
+
+      let mut has_target_line = false;
+      for cl in &issue.code_lines {
+        if cl.line == 0 {
+          return Err(DeduplicateAttemptError::ParseOrValidate(
+            "Dedup code_lines.line must be positive".into(),
+          ));
+        }
+        if cl.code.trim().is_empty() {
+          return Err(DeduplicateAttemptError::ParseOrValidate(
+            "Dedup code_lines.code must be non-empty".into(),
+          ));
+        }
+        if cl.line == issue.line {
+          has_target_line = true;
+        }
+      }
+
+      if !has_target_line {
+        return Err(DeduplicateAttemptError::ParseOrValidate(
+          "Dedup issue.code_lines must contain the target line".into(),
         ));
       }
     }
@@ -501,12 +538,21 @@ async fn review_single_file(
                       "line":123,
                       "message":"short description of the problem",
                       "suggestion":"how to fix it",
-                      "code":"one line above / this line / one line below (recommended 3 lines total)",
+                      "code_lines":[
+                        {{"line":122,"code":"..."}},
+                        {{"line":123,"code":"..."}},
+                        {{"line":124,"code":"..."}}
+                      ],
                       "severity":"suggestion|warning|error",
                       "issue_type":"syntax|type|logic|style|performance|security"
                     }}
                   ]
                 }}
+
+                Constraints for `code_lines`:
+                - `code_lines` must be sorted by `line` ascending
+                - `code_lines` must include at least one element whose `line` equals the issue `line`
+                - each `code_lines[i].code` must be the exact source code text of that line (no `N |` prefixes)
 
                 Do NOT include explanations outside JSON.
                 Do NOT include markdown.
@@ -665,8 +711,12 @@ mod tests {
       "issue.suggestion should not be empty"
     );
     assert!(
-      !issue.code.trim().is_empty(),
-      "issue.code should be non-empty (code context around the issue line)"
+      !issue.code_lines.is_empty(),
+      "issue.code_lines should be non-empty (numbered code context around the issue line)"
+    );
+    assert!(
+      issue.code_lines.iter().any(|cl| cl.line == issue.line),
+      "issue.code_lines must contain the target line (cl.line == issue.line)"
     );
   }
 }

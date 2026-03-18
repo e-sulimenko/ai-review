@@ -25,8 +25,9 @@ pub fn print_readable(summary: &ReviewSummary) {
         issue.message
       );
       println!("Suggestion: {}", issue.suggestion);
-      if !issue.code.trim().is_empty() {
-        println!("Context:\n{}", issue.code);
+      for cl in &issue.code_lines {
+        let marker = if cl.line == issue.line { ">>" } else { "  " };
+        println!("{} {} | {}", marker, cl.line, cl.code);
       }
     }
   }
@@ -60,8 +61,9 @@ pub fn print_debug(summary: &ReviewSummary, file_diffs: &[crate::git::FileDiff])
             issue.message,
             issue.suggestion
           );
-          if !issue.code.trim().is_empty() {
-            println!("Context:\n{}", issue.code);
+          for cl in &issue.code_lines {
+            let marker = if cl.line == issue.line { ">>" } else { "  " };
+            println!("{} {} | {}", marker, cl.line, cl.code);
           }
         }
       }
