@@ -39,6 +39,8 @@ async fn main() -> Result<()> {
     output::print_json(&summary)?;
   } else if cli.debug {
     output::print_debug(&summary, &file_diffs);
+  } else if cli.md {
+    output::write_md_report(&summary)?;
   } else {
     output::print_readable(&summary);
   }

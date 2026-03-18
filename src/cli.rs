@@ -14,6 +14,9 @@ pub struct Cli {
   /// Вывод debug (diff + issues)
   #[arg(long)]
   pub debug: bool,
+  /// Сгенерировать Markdown отчет в `.ai-review/reviews`
+  #[arg(long)]
+  pub md: bool,
   /// Ветка для сравнения (по умолчанию текущая ветка)
   #[arg(long)]
   pub branch: Option<String>,
