@@ -5,7 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt};
 
 const MAX_RETRY_COUNT: usize = 5;
-const CANDIDATE_REVIEWS_PER_DIFF: usize = 3;
+// Генерация нескольких кандидатов нужна, чтобы повысить шанс разнообразия.
+// Однако это сильно увеличивает стоимость (несколько LLM-вызовов на файл).
+// При требовании "не дублировать issue внутри одного ответа" дедупликация
+// становится менее критичной, поэтому держим 1 кандидат.
+const CANDIDATE_REVIEWS_PER_DIFF: usize = 2;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -57,6 +61,9 @@ pub struct Issue {
   pub issue_type: IssueType,
   pub message: String,
   pub suggestion: String,
+  /// Контекст кода вокруг `line` (обычно 3 строки: line-1, line, line+1).
+  /// Должен быть включен в ответ LLM, чтобы проблема была привязана к конкретному месту.
+  pub code: String,
   pub file: String,
 }
 
@@ -238,7 +245,7 @@ Your goal is to remove semantic duplicates across all candidates.
 Rules:
 - Keep only unique issues after deduplication.
 - Treat issues as duplicates when they refer to the same `line` and the same `issue_type`, and their `message` are semantically equivalent.
-- Merge duplicates by keeping the most specific `message` and the best `suggestion`.
+- Merge duplicates by keeping the most specific `message`, the best `suggestion`, and the most representative `code`.
 - If a candidate has non-empty `errors`, ignore it for deduplication (treat it as having zero issues).
 - Return exactly ONE JSON object (no markdown, no explanations).
 - Suggestions and messages must be in Russian.
@@ -260,6 +267,7 @@ Where each issue object must contain:
 - `issue_type` ("syntax"|"type"|"logic"|"style"|"performance"|"security"),
 - `message` (Russian),
 - `suggestion` (Russian),
+- `code` (string, should contain the relevant code context around the issue line),
 - `file` (must equal "{path}").
 "#,
     path = file.path
@@ -369,6 +377,11 @@ Where each issue object must contain:
           "Dedup issue.line must be positive".into(),
         ));
       }
+      if issue.code.trim().is_empty() {
+        return Err(DeduplicateAttemptError::ParseOrValidate(
+          "Dedup issue.code must be non-empty".into(),
+        ));
+      }
     }
   }
 
@@ -448,11 +461,7 @@ async fn review_single_file(
               "role": "system",
               "content": format!(r#"
                 You are a senior software engineer performing automated code review.
-
-                Your task is to analyze code changes and detect problems.
-
-                First internally analyze the code step-by-step.
-                Then return the final result as JSON. Do not skip any steps.
+                Analyze the diff and detect problems in the changed code.
 
                 When unsure, report a warning.
 
@@ -477,6 +486,9 @@ async fn review_single_file(
                 - Do not ignore potential problems.
                 - Prefer reporting issues rather than skipping them.
                 - Analyze carefully.
+                - Do NOT output semantically duplicate issues in the same response.
+                  If two entries refer to the same `line` and the same `issue_type`,
+                  merge them into one issue (choose the most specific `message` / `suggestion`).
 
                 You MUST return ONLY valid JSON.
 
@@ -489,6 +501,7 @@ async fn review_single_file(
                       "line":123,
                       "message":"short description of the problem",
                       "suggestion":"how to fix it",
+                      "code":"one line above / this line / one line below (recommended 3 lines total)",
                       "severity":"suggestion|warning|error",
                       "issue_type":"syntax|type|logic|style|performance|security"
                     }}
@@ -527,6 +540,18 @@ async fn review_single_file(
         review_single_file_request_with_retries(&client, config, file, &body)
           .await,
       );
+  }
+
+  // При 1 кандидате дедупликация не нужна (экономим LLM-вызов).
+  if results.len() <= 1 {
+    return results
+      .into_iter()
+      .next()
+      .unwrap_or(FileReview {
+        path: file.path.clone(),
+        issues: vec![],
+        errors: vec![],
+      });
   }
 
   // Дедупликация семантически одинаковых issue-объектов.
@@ -638,6 +663,10 @@ mod tests {
     assert!(
       !issue.suggestion.is_empty(),
       "issue.suggestion should not be empty"
+    );
+    assert!(
+      !issue.code.trim().is_empty(),
+      "issue.code should be non-empty (code context around the issue line)"
     );
   }
 }

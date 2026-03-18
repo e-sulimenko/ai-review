@@ -25,6 +25,9 @@ pub fn print_readable(summary: &ReviewSummary) {
         issue.message
       );
       println!("Suggestion: {}", issue.suggestion);
+      if !issue.code.trim().is_empty() {
+        println!("Context:\n{}", issue.code);
+      }
     }
   }
 }
@@ -57,6 +60,9 @@ pub fn print_debug(summary: &ReviewSummary, file_diffs: &[crate::git::FileDiff])
             issue.message,
             issue.suggestion
           );
+          if !issue.code.trim().is_empty() {
+            println!("Context:\n{}", issue.code);
+          }
         }
       }
     }
