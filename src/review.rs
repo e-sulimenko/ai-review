@@ -2,12 +2,6 @@ use crate::git::FileDiff;
 use crate::llm::{FileReview, LlmReview};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReviewError {
-  pub file: String,
-  pub reason: String,
-}
-
 /// Сводка по всем файлам
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ReviewSummary {
@@ -18,20 +12,24 @@ pub struct ReviewSummary {
 }
 
 /// Агрегируем ревью по всем файлам (LlmReview — один объединённый результат)
-pub fn aggregate_reviews(files: &[FileDiff], review: LlmReview) -> ReviewSummary {
+pub fn aggregate_reviews(files: &[FileDiff], review: Vec<LlmReview>) -> ReviewSummary {
   let total_lines = files.iter().map(|f| f.diff.lines().count()).sum();
-  let issues = review.issues.len();
-  let lines_to_fix = review
-    .issues
+  let all_issues: Vec<_> = review.iter().flat_map(|r| r.issues.iter()).collect();
+  let issues = all_issues.len();
+  let lines_to_fix = all_issues
     .iter()
     .map(|issue| issue.line)
     .collect::<std::collections::HashSet<_>>()
     .len();
 
-  let files = vec![FileReview {
-    path: "".to_string(),
-    issues: review.issues,
-  }];
+  let files = review
+    .into_iter()
+    .map(|r| FileReview {
+      path: r.path,
+      issues: r.issues,
+      errors: r.errors,
+    })
+    .collect();
 
   ReviewSummary {
     total_lines,

@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
   // Агрегируем ревью
   let summary = review::aggregate_reviews(&file_diffs, reviews);
 
+  println!("{:?}", summary);
   // Выводим результаты
   if cli.json {
     output::print_json(&summary)?;

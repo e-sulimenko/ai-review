@@ -1,8 +1,8 @@
-use crate::{config::LlmConfig, git::FileDiff, review::ReviewError};
+use crate::{config::LlmConfig, git::FileDiff};
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -62,6 +62,13 @@ pub struct Issue {
 pub struct FileReview {
   pub path: String,
   pub issues: Vec<Issue>,
+  pub errors: Vec<String>,
+}
+
+/// Ревью одного файла
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LlmFileReview {
+  pub issues: Vec<Issue>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -81,19 +88,15 @@ struct Message {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LlmReview {
+  pub path: String,
   pub issues: Vec<Issue>,
-  pub errors: Vec<ReviewError>,
+  pub errors: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LlmReviewResponse {
-  pub issues: Vec<Issue>,
-}
-
-pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<LlmReview> {
+pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<Vec<LlmReview>> {
   let max_concurrent = 5;
 
-  let reviews: Vec<(Vec<Issue>, Option<ReviewError>)> = stream::iter(diffs)
+  let reviews: Vec<FileReview> = stream::iter(diffs)
     .map(|file| review_single_file(config, file))
     .buffer_unordered(max_concurrent)
     .collect()
@@ -105,7 +108,7 @@ pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<LlmR
 async fn review_single_file(
   config: &LlmConfig,
   file: &FileDiff,
-) -> (Vec<Issue>, Option<ReviewError>) {
+) -> FileReview {
   let client = reqwest::Client::new();
   let prompt = build_prompt_single(file);
 
@@ -192,13 +195,11 @@ async fn review_single_file(
   let resp = match resp {
     Ok(r) => r,
     Err(e) => {
-      return (
-        vec![],
-        Some(ReviewError {
-          file: file.path.clone(),
-          reason: format!("API request failed: {}", e),
-        }),
-      );
+      return FileReview {
+        path: file.path.clone(),
+        issues: vec![],
+        errors: vec![format!("API request failed: {}", e)],
+      };
     }
   };
 
@@ -206,13 +207,11 @@ async fn review_single_file(
   let text = match resp.text().await {
     Ok(t) => t,
     Err(e) => {
-      return (
-        vec![],
-        Some(ReviewError {
-          file: file.path.clone(),
-          reason: format!("Failed reading response: {}", e),
-        }),
-      );
+      return FileReview {
+        path: file.path.clone(),
+        issues: vec![],
+        errors: vec![format!("Failed reading response: {}", e)],
+      };
     }
   };
 
@@ -220,13 +219,11 @@ async fn review_single_file(
   let json = match extract_json(&text) {
     Some(j) => j,
     None => {
-      return (
-        vec![],
-        Some(ReviewError {
-          file: file.path.clone(),
-          reason: "LLM did not return JSON".into(),
-        }),
-      );
+      return FileReview {
+        path: file.path.clone(),
+        issues: vec![],
+        errors: vec!["LLM did not return JSON".into()],
+      };
     }
   };
 
@@ -234,27 +231,27 @@ async fn review_single_file(
     Ok(r) => r,
 
     Err(e) => {
-      return (
-        vec![],
-        Some(ReviewError {
-          file: file.path.clone(),
-          reason: format!("Invalid JSON: {}", e),
-        }),
-      );
+      return FileReview {
+        path: file.path.clone(),
+        issues: vec![],
+        errors: vec![format!("Invalid JSON: {}", e)],
+      };
     }
   };
 
-  println!("Response for {} file: {:?}", file.path, response);
-  match serde_json::from_str::<LlmReviewResponse>(&response.choices[0].message.content) {
-    Ok(r) => (r.issues, None),
+  println!("Response for file: {}, content: {:?}", file.path, &response.choices[0].message.content);
+  match serde_json::from_str::<LlmFileReview>(&response.choices[0].message.content) {
+      Ok(r) => FileReview {
+      path: file.path.clone(),
+      issues: r.issues,
+      errors: vec![],
+    },
 
-    Err(e) => (
-      vec![],
-      Some(ReviewError {
-        file: file.path.clone(),
-        reason: format!("Invalid JSON: {}", e),
-      }),
-    ),
+    Err(e) => FileReview {
+      path: file.path.clone(),
+      issues: vec![],
+      errors: vec![format!("Invalid JSON: {}", e)],
+    },
   }
 }
 
@@ -274,19 +271,29 @@ fn build_prompt_single(file: &FileDiff) -> String {
   )
 }
 
-fn merge_reviews(results: Vec<(Vec<Issue>, Option<ReviewError>)>) -> LlmReview {
-  let mut issues = Vec::new();
-  let mut errors = Vec::new();
+fn merge_reviews(results: Vec<FileReview>) -> Vec<LlmReview> {
+  let mut dict = HashMap::<String, LlmReview>::new();
 
-  for (i, e) in results {
-    issues.extend(i);
-
-    if let Some(err) = e {
-      errors.push(err);
+  for review in results {
+    match dict.get_mut(&review.path) {
+      Some(file_review) => {
+        file_review.errors.extend(review.errors);
+        file_review.issues.extend(review.issues);
+      },
+      None => {
+        dict.insert(
+          review.path.clone(),
+          LlmReview {
+            path: review.path.clone(),
+            issues: review.issues,
+            errors: review.errors,
+          },
+        );
+      }
     }
   }
 
-  LlmReview { issues, errors }
+  dict.into_values().collect()
 }
 
 fn extract_json(text: &str) -> Option<String> {
@@ -309,7 +316,7 @@ mod tests {
   async fn review_single_file_real_llm_has_required_fields_when_issues_present() {
     let config = LlmConfig {
       api_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
-      api_key: "sk-or-v1-"
+      api_key: "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"
         .to_string(),
       model: "openrouter/hunter-alpha".to_string(),
     };
@@ -319,24 +326,24 @@ mod tests {
       diff: "fn main() { println!(\"hello\"); let x = 1; Ok(x) }".to_string(),
     };
 
-    let (issues, error) = review_single_file(&config, &file).await;
+    let file_review = review_single_file(&config, &file).await;
 
-    println!("Issues: {:?}", issues);
-    println!("Error: {:?}", error);
+    println!("Issues: {:?}", file_review.issues);
+    println!("Error: {:?}", file_review.errors);
     // Если случилась ошибка сети/авторизации — явно падаем.
     assert!(
-      error.is_none(),
+      !file_review.errors.is_empty(),
       "expected no error from LLM, got: {:?}",
-      error
+      file_review.errors,
     );
 
     // Модель может вернуть 0 issues — в этом случае тест не будет проверять поля.
-    if issues.is_empty() {
+    if file_review.issues.is_empty() {
       eprintln!("LLM returned no issues; JSON shape not validated in this run");
       return;
     }
 
-    let issue = &issues[0];
+    let issue = &file_review.issues[0];
     // Проверяем, что все ключевые поля из JSON присутствуют и распарсены.
     assert!(
       !issue.file.is_empty(),
