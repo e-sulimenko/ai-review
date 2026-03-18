@@ -95,6 +95,73 @@ pub struct LlmReview {
   pub errors: Vec<String>,
 }
 
+enum LlmAttemptError {
+  Request(String),
+  Parse(String),
+}
+
+async fn review_single_file_once(
+  client: &reqwest::Client,
+  config: &LlmConfig,
+  file: &FileDiff,
+  body: &serde_json::Value,
+) -> std::result::Result<LlmFileReview, LlmAttemptError> {
+  println!("Create request for {} file", file.path);
+  let resp = client
+    .post(&config.api_url)
+    .bearer_auth(&config.api_key)
+    .json(body)
+    .send()
+    .await;
+
+  let resp = match resp {
+    Ok(r) => r,
+    Err(e) => return Err(LlmAttemptError::Request(format!("API request failed: {}", e))),
+  };
+
+  println!("After request for {} file", file.path);
+  let text = match resp.text().await {
+    Ok(t) => t,
+    Err(e) => {
+      return Err(LlmAttemptError::Request(format!(
+        "Failed reading response: {}",
+        e
+      )))
+    },
+  };
+
+  println!("Got repsonse for {} file", file.path);
+  let json = match extract_json(&text) {
+    Some(j) => j,
+    None => return Err(LlmAttemptError::Parse("LLM did not return JSON".into())),
+  };
+
+  let response = match serde_json::from_str::<Response>(&json) {
+    Ok(r) => r,
+    Err(e) => {
+      return Err(LlmAttemptError::Parse(format!(
+        "Invalid JSON (response wrapper): {}",
+        e
+      )))
+    }
+  };
+
+  if response.choices.is_empty() {
+    return Err(LlmAttemptError::Parse("LLM response has empty choices".into()));
+  }
+
+  let content = &response.choices[0].message.content;
+  println!("Response for file: {}, content: {:?}", file.path, content);
+
+  match serde_json::from_str::<LlmFileReview>(content) {
+    Ok(r) => Ok(r),
+    Err(e) => Err(LlmAttemptError::Parse(format!(
+      "Invalid JSON (file review): {}",
+      e
+    ))),
+  }
+}
+
 pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<Vec<LlmReview>> {
   let max_concurrent = 5;
 
@@ -195,62 +262,7 @@ async fn review_single_file(
       attempt + 1,
       MAX_RETRY_COUNT
     );
-    let resp = client
-      .post(&config.api_url)
-      .bearer_auth(&config.api_key)
-      .json(&body)
-      .send()
-      .await;
-
-    let resp = match resp {
-      Ok(r) => r,
-      Err(e) => {
-        return FileReview {
-          path: file.path.clone(),
-          issues: vec![],
-          errors: vec![format!("API request failed: {}", e)],
-        };
-      }
-    };
-
-    println!("After request for {} file", file.path);
-    let text = match resp.text().await {
-      Ok(t) => t,
-      Err(e) => {
-        return FileReview {
-          path: file.path.clone(),
-          issues: vec![],
-          errors: vec![format!("Failed reading response: {}", e)],
-        };
-      }
-    };
-
-    println!("Got repsonse for {} file", file.path);
-    let json = match extract_json(&text) {
-      Some(j) => j,
-      None => {
-        last_json_error = Some("LLM did not return JSON".into());
-        continue;
-      }
-    };
-
-    let response = match serde_json::from_str::<Response>(&json) {
-      Ok(r) => r,
-      Err(e) => {
-        last_json_error = Some(format!("Invalid JSON (response wrapper): {}", e));
-        continue;
-      }
-    };
-
-    if response.choices.is_empty() {
-      last_json_error = Some("LLM response has empty choices".into());
-      continue;
-    }
-
-    let content = &response.choices[0].message.content;
-    println!("Response for file: {}, content: {:?}", file.path, content);
-
-    match serde_json::from_str::<LlmFileReview>(content) {
+    match review_single_file_once(&client, config, file, &body).await {
       Ok(r) => {
         return FileReview {
           path: file.path.clone(),
@@ -258,8 +270,15 @@ async fn review_single_file(
           errors: vec![],
         };
       }
-      Err(e) => {
-        last_json_error = Some(format!("Invalid JSON (file review): {}", e));
+      Err(LlmAttemptError::Request(e)) => {
+        return FileReview {
+          path: file.path.clone(),
+          issues: vec![],
+          errors: vec![e],
+        };
+      }
+      Err(LlmAttemptError::Parse(e)) => {
+        last_json_error = Some(e);
         continue;
       }
     }
