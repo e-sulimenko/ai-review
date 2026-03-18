@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt};
 
 const MAX_RETRY_COUNT: usize = 5;
+const CANDIDATE_REVIEWS_PER_DIFF: usize = 3;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -162,6 +163,52 @@ async fn review_single_file_once(
   }
 }
 
+async fn review_single_file_request_with_retries(
+  client: &reqwest::Client,
+  config: &LlmConfig,
+  file: &FileDiff,
+  body: &serde_json::Value,
+) -> FileReview {
+  let mut last_json_error: Option<String> = None;
+
+  for attempt in 0..MAX_RETRY_COUNT {
+    println!(
+      "Create request for {} file (attempt {}/{})",
+      file.path,
+      attempt + 1,
+      MAX_RETRY_COUNT
+    );
+
+    match review_single_file_once(client, config, file, body).await {
+      Ok(r) => {
+        return FileReview {
+          path: file.path.clone(),
+          issues: r.issues,
+          errors: vec![],
+        };
+      }
+      Err(LlmAttemptError::Request(e)) => {
+        // Для сетевых/HTTP ошибок ретраи не делаем (как и раньше).
+        return FileReview {
+          path: file.path.clone(),
+          issues: vec![],
+          errors: vec![e],
+        };
+      }
+      Err(LlmAttemptError::Parse(e)) => {
+        last_json_error = Some(e);
+        continue;
+      }
+    }
+  }
+
+  FileReview {
+    path: file.path.clone(),
+    issues: vec![],
+    errors: vec![last_json_error.unwrap_or_else(|| "LLM did not return valid JSON".into())],
+  }
+}
+
 pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<Vec<LlmReview>> {
   let max_concurrent = 5;
 
@@ -253,43 +300,31 @@ async fn review_single_file(
       },
   });
 
-  let mut last_json_error: Option<String> = None;
+  let mut results = Vec::<FileReview>::with_capacity(CANDIDATE_REVIEWS_PER_DIFF);
 
-  for attempt in 0..MAX_RETRY_COUNT {
+  for candidate_idx in 0..CANDIDATE_REVIEWS_PER_DIFF {
     println!(
-      "Create request for {} file (attempt {}/{})",
+      "Generate candidate review for {} ({} / {})",
       file.path,
-      attempt + 1,
-      MAX_RETRY_COUNT
+      candidate_idx + 1,
+      CANDIDATE_REVIEWS_PER_DIFF
     );
-    match review_single_file_once(&client, config, file, &body).await {
-      Ok(r) => {
-        return FileReview {
-          path: file.path.clone(),
-          issues: r.issues,
-          errors: vec![],
-        };
-      }
-      Err(LlmAttemptError::Request(e)) => {
-        return FileReview {
-          path: file.path.clone(),
-          issues: vec![],
-          errors: vec![e],
-        };
-      }
-      Err(LlmAttemptError::Parse(e)) => {
-        last_json_error = Some(e);
-        continue;
-      }
-    }
+    results
+      .push(
+        review_single_file_request_with_retries(&client, config, file, &body)
+          .await,
+      );
   }
 
-  FileReview {
-    path: file.path.clone(),
-    issues: vec![],
-    errors: vec![last_json_error
-      .unwrap_or_else(|| "LLM did not return valid JSON".into())],
-  }
+  // Пока что наружу отдаём только первый результат — дальше будет дедупликация.
+  results
+    .into_iter()
+    .next()
+    .unwrap_or(FileReview {
+      path: file.path.clone(),
+      issues: vec![],
+      errors: vec!["No candidate reviews generated".into()],
+    })
 }
 
 fn build_prompt_single(file: &FileDiff) -> String {
