@@ -101,6 +101,11 @@ enum LlmAttemptError {
   Parse(String),
 }
 
+#[derive(Debug, Deserialize)]
+struct DeduplicateResponse {
+  reviews: Vec<FileReview>,
+}
+
 async fn review_single_file_once(
   client: &reqwest::Client,
   config: &LlmConfig,
@@ -206,6 +211,214 @@ async fn review_single_file_request_with_retries(
     path: file.path.clone(),
     issues: vec![],
     errors: vec![last_json_error.unwrap_or_else(|| "LLM did not return valid JSON".into())],
+  }
+}
+
+enum DeduplicateAttemptError {
+  Request(String),
+  ParseOrValidate(String),
+}
+
+async fn deduplicate_reviews_once(
+  client: &reqwest::Client,
+  config: &LlmConfig,
+  file: &FileDiff,
+  candidates: &[FileReview],
+) -> std::result::Result<Vec<FileReview>, DeduplicateAttemptError> {
+  let candidates_json = serde_json::to_string(candidates)
+    .unwrap_or_else(|_| "[]".to_string());
+
+  let system_prompt = format!(
+    r#"
+You are a senior software engineer performing automated code review deduplication.
+
+The user will provide a JSON array named `candidates`. Each element is a FileReview produced by analyzing the SAME diff for the same file.
+Your goal is to remove semantic duplicates across all candidates.
+
+Rules:
+- Keep only unique issues after deduplication.
+- Treat issues as duplicates when they refer to the same `line` and the same `issue_type`, and their `message` are semantically equivalent.
+- Merge duplicates by keeping the most specific `message` and the best `suggestion`.
+- If a candidate has non-empty `errors`, ignore it for deduplication (treat it as having zero issues).
+- Return exactly ONE JSON object (no markdown, no explanations).
+- Suggestions and messages must be in Russian.
+
+Output schema (JSON only):
+{{
+  "reviews": [
+    {{
+      "path": "{path}",
+      "issues": [ {{issue}} ],
+      "errors": []
+    }}
+  ]
+}}
+
+Where each issue object must contain:
+- `line` (positive integer),
+- `severity` ("error"|"warning"|"suggestion"),
+- `issue_type` ("syntax"|"type"|"logic"|"style"|"performance"|"security"),
+- `message` (Russian),
+- `suggestion` (Russian),
+- `file` (must equal "{path}").
+"#,
+    path = file.path
+  );
+
+  let body = serde_json::json!({
+    "model": config.model,
+    "messages": [
+      { "role": "system", "content": system_prompt },
+      { "role": "user", "content": format!("candidates JSON (same diff, same file): {}", candidates_json) }
+    ],
+    "temperature": 0,
+    "response_format": { "type": "json_object" }
+  });
+
+  let resp = client
+    .post(&config.api_url)
+    .bearer_auth(&config.api_key)
+    .json(&body)
+    .send()
+    .await;
+
+  let resp = match resp {
+    Ok(r) => r,
+    Err(e) => {
+      return Err(DeduplicateAttemptError::Request(format!(
+        "API request failed: {}",
+        e
+      )))
+    }
+  };
+
+  let text = match resp.text().await {
+    Ok(t) => t,
+    Err(e) => {
+      return Err(DeduplicateAttemptError::Request(format!(
+        "Failed reading response: {}",
+        e
+      )))
+    }
+  };
+
+  let json = match extract_json(&text) {
+    Some(j) => j,
+    None => {
+      return Err(DeduplicateAttemptError::ParseOrValidate(
+        "LLM did not return JSON wrapper".into(),
+      ))
+    }
+  };
+
+  let response = match serde_json::from_str::<Response>(&json) {
+    Ok(r) => r,
+    Err(e) => {
+      return Err(DeduplicateAttemptError::ParseOrValidate(format!(
+        "Invalid JSON (response wrapper): {}",
+        e
+      )))
+    }
+  };
+
+  if response.choices.is_empty() {
+    return Err(DeduplicateAttemptError::ParseOrValidate(
+      "LLM response has empty choices".into(),
+    ));
+  }
+
+  let content = &response.choices[0].message.content;
+  let content_json = extract_json(content).ok_or_else(|| {
+    DeduplicateAttemptError::ParseOrValidate("LLM did not return JSON content".into())
+  })?;
+
+  let dedup_response = match serde_json::from_str::<DeduplicateResponse>(&content_json) {
+    Ok(r) => r,
+    Err(e) => {
+      return Err(DeduplicateAttemptError::ParseOrValidate(format!(
+        "Invalid JSON (dedup response): {}",
+        e
+      )))
+    }
+  };
+
+  // Validate: each review must correspond to FileReview for the same path.
+  if dedup_response.reviews.is_empty() {
+    return Err(DeduplicateAttemptError::ParseOrValidate(
+      "Dedup response contains empty reviews list".into(),
+    ));
+  }
+
+  for r in &dedup_response.reviews {
+    if r.path != file.path {
+      return Err(DeduplicateAttemptError::ParseOrValidate(format!(
+        "Dedup review path mismatch: expected {}, got {}",
+        file.path, r.path
+      )));
+    }
+
+    for issue in &r.issues {
+      if issue.file != file.path {
+        return Err(DeduplicateAttemptError::ParseOrValidate(format!(
+          "Dedup issue.file mismatch: expected {}, got {}",
+          file.path, issue.file
+        )));
+      }
+      if issue.line == 0 {
+        return Err(DeduplicateAttemptError::ParseOrValidate(
+          "Dedup issue.line must be positive".into(),
+        ));
+      }
+    }
+  }
+
+  Ok(dedup_response.reviews)
+}
+
+async fn deduplicate_reviews_with_retries(
+  client: &reqwest::Client,
+  config: &LlmConfig,
+  file: &FileDiff,
+  candidates: &[FileReview],
+) -> FileReview {
+  let mut last_err: Option<String> = None;
+
+  for attempt in 0..MAX_RETRY_COUNT {
+    println!(
+      "Create dedup request for {} (attempt {}/{})",
+      file.path,
+      attempt + 1,
+      MAX_RETRY_COUNT
+    );
+
+    match deduplicate_reviews_once(client, config, file, candidates).await {
+      Ok(reviews) => {
+        return reviews.into_iter().next().unwrap_or(FileReview {
+          path: file.path.clone(),
+          issues: vec![],
+          errors: vec![],
+        });
+      }
+      Err(DeduplicateAttemptError::Request(e)) => {
+        // Network/HTTP errors: do not retry.
+        return FileReview {
+          path: file.path.clone(),
+          issues: vec![],
+          errors: vec![e],
+        };
+      }
+      Err(DeduplicateAttemptError::ParseOrValidate(e)) => {
+        last_err = Some(e);
+        continue;
+      }
+    }
+  }
+
+  FileReview {
+    path: file.path.clone(),
+    issues: vec![],
+    errors: vec![last_err
+      .unwrap_or_else(|| "Dedup LLM did not return a valid deduplicated JSON".into())],
   }
 }
 
@@ -316,15 +529,8 @@ async fn review_single_file(
       );
   }
 
-  // Пока что наружу отдаём только первый результат — дальше будет дедупликация.
-  results
-    .into_iter()
-    .next()
-    .unwrap_or(FileReview {
-      path: file.path.clone(),
-      issues: vec![],
-      errors: vec!["No candidate reviews generated".into()],
-    })
+  // Дедупликация семантически одинаковых issue-объектов.
+  deduplicate_reviews_with_retries(&client, config, file, &results).await
 }
 
 fn build_prompt_single(file: &FileDiff) -> String {
