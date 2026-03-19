@@ -9,11 +9,27 @@ pub struct Config {
   pub llm: LlmConfig,
 }
 
+fn default_max_retry_count() -> usize {
+  3
+}
+
+fn default_candidate_reviews_per_diff() -> usize {
+  2
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct LlmConfig {
   pub api_url: String,
   pub api_key: String,
   pub model: String,
+  /// Сколько раз пробовать запрос к LLM при ошибках парсинга/валидации JSON.
+  #[serde(default = "default_max_retry_count")]
+  pub max_retry_count: usize,
+
+  /// Сколько "кандидатных" ревью нужно сгенерировать для одного diff-файла
+  /// перед дедупликацией.
+  #[serde(default = "default_candidate_reviews_per_diff")]
+  pub candidate_reviews_per_diff: usize,
   /// Дополнительные поля, которые будут добавлены в JSON body
   /// запроса к LLM на том же уровне, что и `model`/`messages`.
   #[serde(default)]
@@ -48,6 +64,8 @@ pub fn load_config() -> Result<Config> {
       api_url,
       api_key,
       model,
+      max_retry_count: default_max_retry_count(),
+      candidate_reviews_per_diff: default_candidate_reviews_per_diff(),
       extra_body: Default::default(),
     },
   })

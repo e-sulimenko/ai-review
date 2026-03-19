@@ -74,6 +74,10 @@ cargo run -- --md
 
 В секции `llm` можно указать `extra_body` — любые дополнительные поля, которые будут добавлены в JSON body запроса к LLM на том же уровне, что и `model` и `messages`.
 
+Также можно настроить поведение ретраев и количество candidate-ревью:
+- `max_retry_count` (по умолчанию `3`) — сколько раз повторять запрос, если LLM вернул невалидный JSON.
+- `candidate_reviews_per_diff` (по умолчанию `2`) — сколько candidate-ревью сгенерировать на один diff-файл перед дедупликацией.
+
 Пример:
 ```json
 {
@@ -81,6 +85,8 @@ cargo run -- --md
     "api_url": "https://openrouter.ai/api/v1/chat/completions",
     "api_key": "YOUR_API_KEY",
     "model": "openrouter/hunter-alpha",
+    "max_retry_count": 3,
+    "candidate_reviews_per_diff": 2,
     "extra_body": {
       "temperature": 0.2,
       "max_tokens": 1200

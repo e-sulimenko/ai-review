@@ -4,13 +4,6 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt};
 
-const MAX_RETRY_COUNT: usize = 5;
-// Генерация нескольких кандидатов нужна, чтобы повысить шанс разнообразия.
-// Однако это сильно увеличивает стоимость (несколько LLM-вызовов на файл).
-// При требовании "не дублировать issue внутри одного ответа" дедупликация
-// становится менее критичной, поэтому держим 1 кандидат.
-const CANDIDATE_REVIEWS_PER_DIFF: usize = 2;
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum IssueSeverity {
@@ -152,7 +145,7 @@ struct DeduplicateResponse {
 async fn review_single_file_once(
   client: &reqwest::Client,
   config: &LlmConfig,
-  file: &FileDiff,
+  _file: &FileDiff,
   body: &serde_json::Value,
 ) -> std::result::Result<LlmFileReview, LlmAttemptError> {
   let resp = client
@@ -215,7 +208,7 @@ async fn review_single_file_request_with_retries(
 ) -> FileReview {
   let mut last_json_error: Option<String> = None;
 
-  for attempt in 0..MAX_RETRY_COUNT {
+  for _attempt in 0..config.max_retry_count {
     match review_single_file_once(client, config, file, body).await {
       Ok(r) => {
         return FileReview {
@@ -446,7 +439,7 @@ async fn deduplicate_reviews_with_retries(
 ) -> FileReview {
   let mut last_err: Option<String> = None;
 
-  for attempt in 0..MAX_RETRY_COUNT {
+  for _attempt in 0..config.max_retry_count {
     match deduplicate_reviews_once(client, config, file, candidates).await {
       Ok(reviews) => {
         return reviews.into_iter().next().unwrap_or(FileReview {
@@ -580,9 +573,9 @@ async fn review_single_file(
 
   let body = apply_llm_extra_request_fields(body, &config.extra_body);
 
-  let mut results = Vec::<FileReview>::with_capacity(CANDIDATE_REVIEWS_PER_DIFF);
+  let mut results = Vec::<FileReview>::with_capacity(config.candidate_reviews_per_diff);
 
-  for candidate_idx in 0..CANDIDATE_REVIEWS_PER_DIFF {
+  for _candidate_idx in 0..config.candidate_reviews_per_diff {
     results
       .push(
         review_single_file_request_with_retries(&client, config, file, &body)
@@ -670,6 +663,8 @@ mod tests {
       api_key: "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"
         .to_string(),
       model: "openrouter/hunter-alpha".to_string(),
+      max_retry_count: 3,
+      candidate_reviews_per_diff: 2,
       extra_body: Default::default(),
     };
 
