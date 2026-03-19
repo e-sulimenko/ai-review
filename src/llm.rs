@@ -2,7 +2,7 @@ use crate::{config::LlmConfig, git::FileDiff, ui_log::UiLogger};
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, time::Instant};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -181,9 +181,20 @@ struct DeduplicateResponse {
 async fn review_single_file_once(
   client: &reqwest::Client,
   config: &LlmConfig,
-  _file: &FileDiff,
+  file: &FileDiff,
   body: &serde_json::Value,
+  logger: &UiLogger,
+  candidate_no: usize,
+  attempt_no: usize,
 ) -> std::result::Result<LlmFileReview, LlmAttemptError> {
+  let total_start = Instant::now();
+
+  logger.info(&format!(
+    "{}: sending LLM request (candidate {}, attempt {})...",
+    file.path, candidate_no, attempt_no
+  ));
+
+  let send_start = Instant::now();
   let resp = client
     .post(&config.api_url)
     .bearer_auth(&config.api_key)
@@ -192,10 +203,22 @@ async fn review_single_file_once(
     .await;
 
   let resp = match resp {
-    Ok(r) => r,
+    Ok(r) => {
+      let status = r.status();
+      logger.info(&format!(
+        "{}: LLM response headers received (candidate {}, attempt {}), status={} after {}ms",
+        file.path,
+        candidate_no,
+        attempt_no,
+        status,
+        send_start.elapsed().as_millis()
+      ));
+      r
+    }
     Err(e) => return Err(LlmAttemptError::Request(format!("API request failed: {}", e))),
   };
 
+  let read_start = Instant::now();
   let text = match resp.text().await {
     Ok(t) => t,
     Err(e) => {
@@ -205,6 +228,25 @@ async fn review_single_file_once(
       )))
     },
   };
+
+  logger.info(&format!(
+    "{}: LLM response body received (candidate {}, attempt {}), {} chars read in {}ms",
+    file.path,
+    candidate_no,
+    attempt_no,
+    text.len(),
+    read_start.elapsed().as_millis()
+  ));
+
+  if logger.debug_enabled() {
+    logger.debug(&format!(
+      "{}: response parse pipeline total {}ms (candidate {}, attempt {})",
+      file.path,
+      total_start.elapsed().as_millis(),
+      candidate_no,
+      attempt_no
+    ));
+  }
 
   let json = match extract_json(&text) {
     Some(j) => j,
@@ -253,8 +295,36 @@ async fn review_single_file_request_with_retries(
       ));
     }
 
-    match review_single_file_once(client, config, file, body).await {
+    if logger.debug_enabled() {
+      logger.debug(&format!(
+        "{}: request payload size: {} chars; extra_body keys: {:?}",
+        file.path,
+        serde_json::to_string(body).map(|s| s.len()).unwrap_or(0),
+        config.extra_body.keys().collect::<Vec<_>>()
+      ));
+    }
+
+    match review_single_file_once(
+      client,
+      config,
+      file,
+      body,
+      logger,
+      candidate_no,
+      attempt + 1,
+    )
+      .await
+    {
       Ok(r) => {
+        if logger.debug_enabled() {
+          logger.debug(&format!(
+            "{}: candidate {} parsed: issues={}, errors={}",
+            file.path,
+            candidate_no,
+            r.issues.len(),
+            0usize
+          ));
+        }
         return FileReview {
           path: file.path.clone(),
           issues: r.issues,
@@ -275,6 +345,15 @@ async fn review_single_file_request_with_retries(
         };
       }
       Err(LlmAttemptError::Parse(e)) => {
+        if logger.debug_enabled() {
+          logger.debug(&format!(
+            "{}: candidate {} parse error (attempt {}): {}",
+            file.path,
+            candidate_no,
+            attempt + 1,
+            e
+          ));
+        }
         last_json_error = Some(e);
         continue;
       }
@@ -481,13 +560,32 @@ async fn deduplicate_reviews_with_retries(
   let mut last_err: Option<String> = None;
 
   for attempt in 0..config.max_retry_count {
+    if logger.debug_enabled() {
+      logger.debug(&format!(
+        "{}: dedup attempt {}/{} (candidates={})",
+        file.path,
+        attempt + 1,
+        config.max_retry_count,
+        candidates.len()
+      ));
+    }
+
     match deduplicate_reviews_once(client, config, file, candidates).await {
       Ok(reviews) => {
-        return reviews.into_iter().next().unwrap_or(FileReview {
+        let result = reviews.into_iter().next().unwrap_or(FileReview {
           path: file.path.clone(),
           issues: vec![],
           errors: vec![],
         });
+        if logger.debug_enabled() {
+          logger.debug(&format!(
+            "{}: dedup parsed: issues={}, errors={}",
+            file.path,
+            result.issues.len(),
+            result.errors.len()
+          ));
+        }
+        return result;
       }
       Err(DeduplicateAttemptError::Request(e)) => {
         logger.warn(&format!(
@@ -509,6 +607,14 @@ async fn deduplicate_reviews_with_retries(
             file.path,
             attempt + 1,
             config.max_retry_count
+          ));
+        }
+        if logger.debug_enabled() {
+          logger.debug(&format!(
+            "{}: dedup parse error (attempt {}): {}",
+            file.path,
+            attempt + 1,
+            e
           ));
         }
         last_err = Some(e);
@@ -536,6 +642,14 @@ pub async fn review_files(
     "Starting LLM review for {} file(s) (max {} in parallel).",
     total_files, max_concurrent
   ));
+  if logger.debug_enabled() {
+    logger.debug(&format!(
+      "LLM review settings: candidate_reviews_per_diff={}, max_retry_count={}, max_concurrent={}",
+      config.candidate_reviews_per_diff,
+      config.max_retry_count,
+      max_concurrent
+    ));
+  }
 
   let reviews: Vec<FileReview> = stream::iter(diffs.iter().enumerate())
     .map(|(idx, file)| review_single_file(config, file, idx + 1, total_files, logger))
@@ -745,7 +859,7 @@ mod tests {
 
   #[tokio::test]
   async fn review_single_file_real_llm_has_required_fields_when_issues_present() {
-    let logger = UiLogger::new(false);
+    let logger = UiLogger::new(false, false);
     let config = LlmConfig {
       api_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
       api_key: "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"

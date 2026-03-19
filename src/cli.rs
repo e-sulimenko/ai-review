@@ -14,6 +14,9 @@ pub struct Cli {
   /// Сгенерировать Markdown отчет в `.ai-review/reviews`
   #[arg(long)]
   pub md: bool,
+  /// Enable verbose debug logs (for developers / advanced users).
+  #[arg(long)]
+  pub debug: bool,
 }
 
 /// Функция для парсинга аргументов
