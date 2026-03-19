@@ -421,6 +421,7 @@ Where each issue object must contain:
 
   let body = serde_json::json!({
     "model": config.model,
+    "stream": false,
     "messages": [
       { "role": "system", "content": system_prompt },
       { "role": "user", "content": format!("candidates JSON (same diff, same file): {}", candidates_json) }
@@ -754,6 +755,7 @@ async fn review_single_file(
       "response_format": {
         "type": "json_object"
       },
+      "stream": false,
   });
 
   let body = apply_llm_extra_request_fields(body, &config.extra_body);

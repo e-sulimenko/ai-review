@@ -7,6 +7,10 @@ use serde_json::{Map, Value};
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
   pub llm: LlmConfig,
+  #[serde(default)]
+  pub include: Option<Vec<String>>,
+  #[serde(default)]
+  pub exclude: Option<Vec<String>>,
 }
 
 fn default_max_retry_count() -> usize {
@@ -59,7 +63,7 @@ pub fn load_config() -> Result<Config> {
   let model =
     std::env::var("AI_REVIEW_MODEL").unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string());
 
-  Ok(Config {
+  let config = Config {
     llm: LlmConfig {
       api_url,
       api_key,
@@ -68,7 +72,12 @@ pub fn load_config() -> Result<Config> {
       candidate_reviews_per_diff: default_candidate_reviews_per_diff(),
       extra_body: Default::default(),
     },
-  })
+    include: None,
+    exclude: None,
+  };
+
+  validate_config(&config)?;
+  Ok(config)
 }
 
 fn read_config(path: PathBuf) -> Result<Config> {
@@ -76,5 +85,15 @@ fn read_config(path: PathBuf) -> Result<Config> {
 
   let config: Config = serde_json::from_str(&content).context("Invalid config JSON")?;
 
+  validate_config(&config)?;
   Ok(config)
+}
+
+fn validate_config(config: &Config) -> Result<()> {
+  if config.include.is_some() && config.exclude.is_some() {
+    anyhow::bail!(
+      "В конфиге должен быть указан только один параметр: либо `include`, либо `exclude`."
+    );
+  }
+  Ok(())
 }

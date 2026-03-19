@@ -37,7 +37,26 @@ async fn main() -> Result<()> {
   }
 
   // Получаем diff по текущей ветке (сравнение с HEAD рабочей копии)
-  let file_diffs = git::get_diff(&branch)?;
+  let mut file_diffs = git::get_diff(&branch)?;
+
+  if let Some(include) = &config.include {
+    file_diffs.retain(|fd| {
+      include.iter().any(|entry| path_matches_entry(&fd.path, entry))
+    });
+    logger.info(&format!(
+      "After include filter: {} file(s) to review.",
+      file_diffs.len()
+    ));
+  } else if let Some(exclude) = &config.exclude {
+    file_diffs.retain(|fd| {
+      !exclude.iter().any(|entry| path_matches_entry(&fd.path, entry))
+    });
+    logger.info(&format!(
+      "After exclude filter: {} file(s) to review.",
+      file_diffs.len()
+    ));
+  }
+
   if file_diffs.is_empty() {
     logger.info(&format!("No changes detected relative to {}.", &branch));
     return Ok(());
@@ -72,4 +91,20 @@ async fn main() -> Result<()> {
   }
 
   Ok(())
+}
+
+fn path_matches_entry(path: &str, entry: &str) -> bool {
+  // Семантика простая и предсказуемая:
+  // - если `entry` задаёт файл, то матчимся по `path.ends_with(entry)`
+  // - если `entry` задаёт папку, то матчимся по `path.starts_with(entry)`
+  // - допускаем как `src`, так и `src/`
+  let path_norm = path.trim_start_matches("./");
+  let entry_norm = entry.trim().trim_end_matches('/').trim_start_matches("./");
+  if entry_norm.is_empty() {
+    return false;
+  }
+
+  let path_p = std::path::Path::new(path_norm);
+  let entry_p = std::path::Path::new(entry_norm);
+  path_p.starts_with(entry_p) || path_p.ends_with(entry_p)
 }

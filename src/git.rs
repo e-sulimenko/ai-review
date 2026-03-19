@@ -70,7 +70,7 @@ pub fn get_diff(branch: &str) -> Result<Vec<FileDiff>> {
     }
   }
 
-  Ok(vec![files[0].clone(), files[1].clone()])
+  Ok(files)
 }
 
 /// Парсинг diff и фильтрация файлов
