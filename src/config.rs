@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -13,6 +14,10 @@ pub struct LlmConfig {
   pub api_url: String,
   pub api_key: String,
   pub model: String,
+  /// Дополнительные поля, которые будут добавлены в JSON body
+  /// запроса к LLM на том же уровне, что и `model`/`messages`.
+  #[serde(default)]
+  pub extra_body: Map<String, Value>,
 }
 
 pub fn load_config() -> Result<Config> {
@@ -43,6 +48,7 @@ pub fn load_config() -> Result<Config> {
       api_url,
       api_key,
       model,
+      extra_body: Default::default(),
     },
   })
 }

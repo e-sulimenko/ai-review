@@ -67,3 +67,24 @@ cargo run -- --json
 ```bash
 cargo run -- --md
 ```
+
+---
+### 3. Конфиг LLM
+Файл конфигурации: `~/.ai-review/config.json` (или `./.ai-review/config.json`).
+
+В секции `llm` можно указать `extra_body` — любые дополнительные поля, которые будут добавлены в JSON body запроса к LLM на том же уровне, что и `model` и `messages`.
+
+Пример:
+```json
+{
+  "llm": {
+    "api_url": "https://openrouter.ai/api/v1/chat/completions",
+    "api_key": "YOUR_API_KEY",
+    "model": "openrouter/hunter-alpha",
+    "extra_body": {
+      "temperature": 0.2,
+      "max_tokens": 1200
+    }
+  }
+}
+```

@@ -131,6 +131,19 @@ enum LlmAttemptError {
   Parse(String),
 }
 
+fn apply_llm_extra_request_fields(
+  mut body: serde_json::Value,
+  extra: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+  if let Some(obj) = body.as_object_mut() {
+    for (k, v) in extra {
+      // Если ключ уже есть в base body, мы его перезатираем.
+      obj.insert(k.clone(), v.clone());
+    }
+  }
+  body
+}
+
 #[derive(Debug, Deserialize)]
 struct DeduplicateResponse {
   reviews: Vec<FileReview>,
@@ -305,6 +318,8 @@ Where each issue object must contain:
     "temperature": 0,
     "response_format": { "type": "json_object" }
   });
+
+  let body = apply_llm_extra_request_fields(body, &config.extra_body);
 
   let resp = client
     .post(&config.api_url)
@@ -581,6 +596,8 @@ async fn review_single_file(
       },
   });
 
+  let body = apply_llm_extra_request_fields(body, &config.extra_body);
+
   let mut results = Vec::<FileReview>::with_capacity(CANDIDATE_REVIEWS_PER_DIFF);
 
   for candidate_idx in 0..CANDIDATE_REVIEWS_PER_DIFF {
@@ -677,6 +694,7 @@ mod tests {
       api_key: "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"
         .to_string(),
       model: "openrouter/hunter-alpha".to_string(),
+      extra_body: Default::default(),
     };
 
     let file = FileDiff {
