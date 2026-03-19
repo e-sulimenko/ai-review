@@ -107,10 +107,10 @@ pub fn write_md_report(summary: &ReviewSummary) -> Result<PathBuf> {
   let mut md = String::new();
   md.push_str("# AI Code Review\n");
   md.push_str(&format!("Generated (unix epoch): {}\n", epoch));
-  md.push_str(&format!("Files changed: {}\n", summary.files.len()));
-  md.push_str(&format!("Lines changed: {}\n", summary.total_lines));
-  md.push_str(&format!("Issues found: {}\n", summary.issues));
-  md.push_str(&format!("Lines to fix: {}\n\n", summary.lines_to_fix));
+  md.push_str(&format!("Files changed: {}  \n", summary.files.len()));
+  md.push_str(&format!("Lines changed: {}  \n", summary.total_lines));
+  md.push_str(&format!("Issues found: {}  \n", summary.issues));
+  md.push_str(&format!("Lines to fix: {}  \n\n", summary.lines_to_fix));
 
   for file in &summary.files {
     if file.issues.is_empty() {
@@ -122,17 +122,17 @@ pub fn write_md_report(summary: &ReviewSummary) -> Result<PathBuf> {
 
     for issue in &file.issues {
       md.push_str(&format!(
-        "### Line {} [{}] ({})\n",
+        "### Line {} [{}] ({})  \n",
         issue.line,
         issue.severity.to_string(),
         issue.issue_type
       ));
       md.push_str(&format!(
-        "**Message:** {}\n",
+        "**Message:** {}  \n",
         sanitize_md_inline_text(&issue.message)
       ));
       md.push_str(&format!(
-        "**Suggestion:** {}\n\n",
+        "**Suggestion:** {}  \n\n",
         sanitize_md_inline_text(&issue.suggestion)
       ));
 

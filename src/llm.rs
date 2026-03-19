@@ -124,6 +124,42 @@ enum LlmAttemptError {
   Parse(String),
 }
 
+fn parse_llm_wrapper_content(wrapper_json: &str) -> std::result::Result<String, String> {
+  let v: serde_json::Value = serde_json::from_str(wrapper_json)
+    .map_err(|e| format!("Invalid JSON in LLM response wrapper: {}", e))?;
+
+  // OpenAI / OpenRouter compatible.
+  if v.get("choices").is_some() {
+    let response: Response = serde_json::from_value(v)
+      .map_err(|e| format!("Invalid JSON (response wrapper): {}", e))?;
+    if response.choices.is_empty() {
+      return Err("LLM response has empty choices".into());
+    }
+    return Ok(response.choices[0].message.content.clone());
+  }
+
+  // Common error wrapper from various providers.
+  if v.get("error").is_some() {
+    let msg = v
+      .get("error")
+      .and_then(|e| e.get("message"))
+      .and_then(|m| m.as_str())
+      .unwrap_or("LLM returned an error object");
+    return Err(format!("LLM API returned error: {}", msg));
+  }
+
+  // Best-effort diagnostics: show keys + a small preview to help debugging.
+  let keys = v
+    .as_object()
+    .map(|o| o.keys().cloned().collect::<Vec<_>>())
+    .unwrap_or_default();
+  let preview: String = wrapper_json.chars().take(300).collect();
+  Err(format!(
+    "Invalid JSON (response wrapper): missing field `choices` and no known alternate fields. Top-level keys: {:?}. Preview: {}",
+    keys, preview
+  ))
+}
+
 fn apply_llm_extra_request_fields(
   mut body: serde_json::Value,
   extra: &serde_json::Map<String, serde_json::Value>,
@@ -175,23 +211,12 @@ async fn review_single_file_once(
     None => return Err(LlmAttemptError::Parse("LLM did not return JSON".into())),
   };
 
-  let response = match serde_json::from_str::<Response>(&json) {
-    Ok(r) => r,
-    Err(e) => {
-      return Err(LlmAttemptError::Parse(format!(
-        "Invalid JSON (response wrapper): {}",
-        e
-      )))
-    }
+  let content = match parse_llm_wrapper_content(&json) {
+    Ok(c) => c,
+    Err(e) => return Err(LlmAttemptError::Parse(e)),
   };
 
-  if response.choices.is_empty() {
-    return Err(LlmAttemptError::Parse("LLM response has empty choices".into()));
-  }
-
-  let content = &response.choices[0].message.content;
-
-  match serde_json::from_str::<LlmFileReview>(content) {
+  match serde_json::from_str::<LlmFileReview>(&content) {
     Ok(r) => Ok(r),
     Err(e) => Err(LlmAttemptError::Parse(format!(
       "Invalid JSON (file review): {}",
@@ -338,9 +363,8 @@ Where each issue object must contain:
       ))
     }
   };
-
-  let response = match serde_json::from_str::<Response>(&json) {
-    Ok(r) => r,
+  let content = match parse_llm_wrapper_content(&json) {
+    Ok(c) => c,
     Err(e) => {
       return Err(DeduplicateAttemptError::ParseOrValidate(format!(
         "Invalid JSON (response wrapper): {}",
@@ -348,15 +372,7 @@ Where each issue object must contain:
       )))
     }
   };
-
-  if response.choices.is_empty() {
-    return Err(DeduplicateAttemptError::ParseOrValidate(
-      "LLM response has empty choices".into(),
-    ));
-  }
-
-  let content = &response.choices[0].message.content;
-  let content_json = extract_json(content).ok_or_else(|| {
+  let content_json = extract_json(&content).ok_or_else(|| {
     DeduplicateAttemptError::ParseOrValidate("LLM did not return JSON content".into())
   })?;
 
