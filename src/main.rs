@@ -26,7 +26,6 @@ async fn main() -> Result<()> {
 
   // Отправляем файлы в LLM (MVP — фейковый ревью)
   let reviews = llm::review_files(&config.llm, &file_diffs).await?;
-  println!("{:?}", reviews);
   // Агрегируем ревью
   let summary = review::aggregate_reviews(&file_diffs, reviews);
 

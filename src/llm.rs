@@ -155,7 +155,6 @@ async fn review_single_file_once(
   file: &FileDiff,
   body: &serde_json::Value,
 ) -> std::result::Result<LlmFileReview, LlmAttemptError> {
-  println!("Create request for {} file", file.path);
   let resp = client
     .post(&config.api_url)
     .bearer_auth(&config.api_key)
@@ -168,7 +167,6 @@ async fn review_single_file_once(
     Err(e) => return Err(LlmAttemptError::Request(format!("API request failed: {}", e))),
   };
 
-  println!("After request for {} file", file.path);
   let text = match resp.text().await {
     Ok(t) => t,
     Err(e) => {
@@ -179,7 +177,6 @@ async fn review_single_file_once(
     },
   };
 
-  println!("Got repsonse for {} file", file.path);
   let json = match extract_json(&text) {
     Some(j) => j,
     None => return Err(LlmAttemptError::Parse("LLM did not return JSON".into())),
@@ -200,7 +197,6 @@ async fn review_single_file_once(
   }
 
   let content = &response.choices[0].message.content;
-  println!("Response for file: {}, content: {:?}", file.path, content);
 
   match serde_json::from_str::<LlmFileReview>(content) {
     Ok(r) => Ok(r),
@@ -220,13 +216,6 @@ async fn review_single_file_request_with_retries(
   let mut last_json_error: Option<String> = None;
 
   for attempt in 0..MAX_RETRY_COUNT {
-    println!(
-      "Create request for {} file (attempt {}/{})",
-      file.path,
-      attempt + 1,
-      MAX_RETRY_COUNT
-    );
-
     match review_single_file_once(client, config, file, body).await {
       Ok(r) => {
         return FileReview {
@@ -458,13 +447,6 @@ async fn deduplicate_reviews_with_retries(
   let mut last_err: Option<String> = None;
 
   for attempt in 0..MAX_RETRY_COUNT {
-    println!(
-      "Create dedup request for {} (attempt {}/{})",
-      file.path,
-      attempt + 1,
-      MAX_RETRY_COUNT
-    );
-
     match deduplicate_reviews_once(client, config, file, candidates).await {
       Ok(reviews) => {
         return reviews.into_iter().next().unwrap_or(FileReview {
@@ -601,12 +583,6 @@ async fn review_single_file(
   let mut results = Vec::<FileReview>::with_capacity(CANDIDATE_REVIEWS_PER_DIFF);
 
   for candidate_idx in 0..CANDIDATE_REVIEWS_PER_DIFF {
-    println!(
-      "Generate candidate review for {} ({} / {})",
-      file.path,
-      candidate_idx + 1,
-      CANDIDATE_REVIEWS_PER_DIFF
-    );
     results
       .push(
         review_single_file_request_with_retries(&client, config, file, &body)
@@ -704,8 +680,6 @@ mod tests {
 
     let file_review = review_single_file(&config, &file).await;
 
-    println!("Issues: {:?}", file_review.issues);
-    println!("Error: {:?}", file_review.errors);
     // Если случилась ошибка сети/авторизации — явно падаем.
     assert!(
       !file_review.errors.is_empty(),
