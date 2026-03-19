@@ -16,15 +16,7 @@ pub struct FileDiff {
 }
 
 /// Получаем все файлы для ревью
-pub fn get_diff(branch: &str, fetch: bool) -> Result<Vec<FileDiff>> {
-  if fetch {
-    // Обновляем origin/main
-    Command::new("git")
-      .args(&["fetch", "origin", branch])
-      .status()
-      .context(format!("Failed to fetch {}", branch))?;
-  }
-
+pub fn get_diff(branch: &str) -> Result<Vec<FileDiff>> {
   // Получаем diff по существующим файлам
   let output = Command::new("git")
     .args(&["diff", branch, "-U20"])

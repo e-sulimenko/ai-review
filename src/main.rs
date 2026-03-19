@@ -15,13 +15,10 @@ async fn main() -> Result<()> {
   // Загружаем конфиг
   let config = config::load_config()?;
 
-  let branch = match &cli.branch {
-    Some(b) => b.clone(),
-    None => git::current_branch()?,
-  };
+  let branch = git::current_branch()?;
 
-  // Получаем diff по default (origin/main)
-  let file_diffs = git::get_diff(&branch, cli.fetch)?;
+  // Получаем diff по текущей ветке (сравнение с HEAD рабочей копии)
+  let file_diffs = git::get_diff(&branch)?;
   if file_diffs.is_empty() {
     println!("No changes detected relative to {}.", &branch);
     return Ok(());
@@ -37,8 +34,6 @@ async fn main() -> Result<()> {
   // Выводим результаты
   if cli.json {
     output::print_json(&summary)?;
-  } else if cli.debug {
-    output::print_debug(&summary, &file_diffs);
   } else if cli.md {
     output::write_md_report(&summary)?;
   } else {

@@ -11,19 +11,9 @@ pub struct Cli {
   /// Вывод в JSON
   #[arg(long)]
   pub json: bool,
-  /// Вывод debug (diff + issues)
-  #[arg(long)]
-  pub debug: bool,
   /// Сгенерировать Markdown отчет в `.ai-review/reviews`
   #[arg(long)]
   pub md: bool,
-  /// Ветка для сравнения (по умолчанию текущая ветка)
-  #[arg(long)]
-  pub branch: Option<String>,
-
-  /// Обновлять ветку с удалённого репозитория перед diff
-  #[arg(long)]
-  pub fetch: bool,
 }
 
 /// Функция для парсинга аргументов

@@ -62,20 +62,8 @@ cargo run -- --json
 }
 ```
 
-2. **Debug вывод (diff + issues):**
+2. **Markdown отчет:**
 
 ```bash
-cargo run -- --debug
-```
-
-Пример:
-
-```
-================ DEBUG AI Code Review ================
-File: src/main.rs
---- Diff ---
-+fn main() {}
---- Issues ---
-Line 1 [warning] Consider adding documentation for main function -> Add /// comments above main
-====================================================
+cargo run -- --md
 ```

@@ -46,38 +46,6 @@ pub fn print_json(summary: &ReviewSummary) -> Result<()> {
   Ok(())
 }
 
-/// Debug вывод — показывает diff + issues
-pub fn print_debug(summary: &ReviewSummary, file_diffs: &[crate::git::FileDiff]) {
-  println!("================ DEBUG AI Code Review ================");
-  for file in file_diffs {
-    println!("\nFile: {}", file.path);
-    println!("--- Diff ---");
-    println!("{}", file.diff);
-
-    if let Some(review) = summary.files.iter().find(|r| r.path == file.path) {
-      println!("--- Issues ---");
-      if review.issues.is_empty() {
-        println!("No issues");
-      } else {
-        for issue in &review.issues {
-          println!(
-            "Line {} [{}] {} -> {}",
-            issue.line,
-            issue.severity.to_string(),
-            issue.message,
-            issue.suggestion
-          );
-          for cl in &issue.code_lines {
-            let marker = if cl.line == issue.line { ">>" } else { "  " };
-            println!("{} {} | {}", marker, cl.line, cl.code);
-          }
-        }
-      }
-    }
-  }
-  println!("=====================================================");
-}
-
 fn term_supports_osc8() -> bool {
   // Best-effort: OSC-8 hyperlinks are supported in iTerm2 and VSCode terminals.
   let term_program = env::var("TERM_PROGRAM").unwrap_or_default().to_lowercase();
