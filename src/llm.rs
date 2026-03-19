@@ -1,4 +1,4 @@
-use crate::{config::LlmConfig, git::FileDiff};
+use crate::{config::LlmConfig, git::FileDiff, ui_log::UiLogger};
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -230,10 +230,29 @@ async fn review_single_file_request_with_retries(
   config: &LlmConfig,
   file: &FileDiff,
   body: &serde_json::Value,
+  logger: &UiLogger,
+  candidate_no: usize,
 ) -> FileReview {
   let mut last_json_error: Option<String> = None;
 
-  for _attempt in 0..config.max_retry_count {
+  for attempt in 0..config.max_retry_count {
+    if attempt == 0 {
+      logger.info(&format!(
+        "{}: calling LLM (candidate {}/{})",
+        file.path,
+        candidate_no,
+        config.candidate_reviews_per_diff
+      ));
+    } else {
+      logger.warn(&format!(
+        "{}: invalid LLM JSON; retrying ({}/{}) for candidate {}",
+        file.path,
+        attempt + 1,
+        config.max_retry_count,
+        candidate_no
+      ));
+    }
+
     match review_single_file_once(client, config, file, body).await {
       Ok(r) => {
         return FileReview {
@@ -243,6 +262,11 @@ async fn review_single_file_request_with_retries(
         };
       }
       Err(LlmAttemptError::Request(e)) => {
+        logger.warn(&format!(
+          "{}: LLM request failed for candidate {}: {}",
+          file.path, candidate_no, e
+        ));
+
         // Для сетевых/HTTP ошибок ретраи не делаем (как и раньше).
         return FileReview {
           path: file.path.clone(),
@@ -452,10 +476,11 @@ async fn deduplicate_reviews_with_retries(
   config: &LlmConfig,
   file: &FileDiff,
   candidates: &[FileReview],
+  logger: &UiLogger,
 ) -> FileReview {
   let mut last_err: Option<String> = None;
 
-  for _attempt in 0..config.max_retry_count {
+  for attempt in 0..config.max_retry_count {
     match deduplicate_reviews_once(client, config, file, candidates).await {
       Ok(reviews) => {
         return reviews.into_iter().next().unwrap_or(FileReview {
@@ -465,6 +490,11 @@ async fn deduplicate_reviews_with_retries(
         });
       }
       Err(DeduplicateAttemptError::Request(e)) => {
+        logger.warn(&format!(
+          "{}: deduplication request failed: {}",
+          file.path, e
+        ));
+
         // Network/HTTP errors: do not retry.
         return FileReview {
           path: file.path.clone(),
@@ -473,6 +503,14 @@ async fn deduplicate_reviews_with_retries(
         };
       }
       Err(DeduplicateAttemptError::ParseOrValidate(e)) => {
+        if attempt + 1 < config.max_retry_count {
+          logger.warn(&format!(
+            "{}: deduplication invalid JSON; retrying ({}/{})",
+            file.path,
+            attempt + 1,
+            config.max_retry_count
+          ));
+        }
         last_err = Some(e);
         continue;
       }
@@ -487,11 +525,20 @@ async fn deduplicate_reviews_with_retries(
   }
 }
 
-pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<Vec<LlmReview>> {
+pub async fn review_files(
+  config: &LlmConfig,
+  diffs: &[FileDiff],
+  logger: &UiLogger,
+) -> Result<Vec<LlmReview>> {
   let max_concurrent = 5;
+  let total_files = diffs.len();
+  logger.info(&format!(
+    "Starting LLM review for {} file(s) (max {} in parallel).",
+    total_files, max_concurrent
+  ));
 
-  let reviews: Vec<FileReview> = stream::iter(diffs)
-    .map(|file| review_single_file(config, file))
+  let reviews: Vec<FileReview> = stream::iter(diffs.iter().enumerate())
+    .map(|(idx, file)| review_single_file(config, file, idx + 1, total_files, logger))
     .buffer_unordered(max_concurrent)
     .collect()
     .await;
@@ -502,9 +549,17 @@ pub async fn review_files(config: &LlmConfig, diffs: &[FileDiff]) -> Result<Vec<
 async fn review_single_file(
   config: &LlmConfig,
   file: &FileDiff,
+  file_no: usize,
+  total_files: usize,
+  logger: &UiLogger,
 ) -> FileReview {
   let client = reqwest::Client::new();
   let prompt = build_prompt_single(file);
+
+  logger.info(&format!(
+    "[{}/{}] Reviewing file: {}",
+    file_no, total_files, file.path
+  ));
 
   let body = serde_json::json!({
       "model": config.model,
@@ -594,13 +649,24 @@ async fn review_single_file(
   for _candidate_idx in 0..config.candidate_reviews_per_diff {
     results
       .push(
-        review_single_file_request_with_retries(&client, config, file, &body)
+        review_single_file_request_with_retries(
+          &client,
+          config,
+          file,
+          &body,
+          logger,
+          _candidate_idx + 1
+        )
           .await,
       );
   }
 
   // При 1 кандидате дедупликация не нужна (экономим LLM-вызов).
   if results.len() <= 1 {
+    logger.info(&format!(
+      "{}: only 1 candidate; skipping deduplication.",
+      file.path
+    ));
     return results
       .into_iter()
       .next()
@@ -612,7 +678,12 @@ async fn review_single_file(
   }
 
   // Дедупликация семантически одинаковых issue-объектов.
-  deduplicate_reviews_with_retries(&client, config, file, &results).await
+  logger.info(&format!(
+    "{}: deduplicating {} candidates...",
+    file.path,
+    results.len()
+  ));
+  deduplicate_reviews_with_retries(&client, config, file, &results, logger).await
 }
 
 fn build_prompt_single(file: &FileDiff) -> String {
@@ -674,6 +745,7 @@ mod tests {
 
   #[tokio::test]
   async fn review_single_file_real_llm_has_required_fields_when_issues_present() {
+    let logger = UiLogger::new(false);
     let config = LlmConfig {
       api_url: "https://openrouter.ai/api/v1/chat/completions".to_string(),
       api_key: "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"
@@ -689,7 +761,7 @@ mod tests {
       diff: "fn main() { println!(\"hello\"); let x = 1; Ok(x) }".to_string(),
     };
 
-    let file_review = review_single_file(&config, &file).await;
+    let file_review = review_single_file(&config, &file, 1, 1, &logger).await;
 
     // Если случилась ошибка сети/авторизации — явно падаем.
     assert!(
