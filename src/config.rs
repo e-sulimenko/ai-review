@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::fs;
-use std::path::PathBuf;
 use serde_json::{Map, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -40,53 +40,66 @@ pub struct LlmConfig {
   pub extra_body: Map<String, Value>,
 }
 
+/// Глобальный конфиг в домашней директории (`~/.ai-review/config.json`) и локальный в cwd
+/// (`.ai-review/config.json`) сливаются: локальные ключи перекрывают глобальные, вложенные объекты
+/// объединяются рекурсивно (как `git config` global + local).
 pub fn load_config() -> Result<Config> {
-  // 1. ~/.ai-review/config.json
-  if let Some(home) = dirs::home_dir() {
-    let path = home.join(".ai-review/config.json");
-    if path.exists() {
-      return read_config(path);
+  let global_path = dirs::home_dir().map(|h| h.join(".ai-review/config.json"));
+  let local_path = PathBuf::from(".ai-review/config.json");
+
+  let global_val = global_path
+    .as_ref()
+    .filter(|p| p.exists())
+    .map(|p| read_json_value(p))
+    .transpose()?;
+
+  let local_val = local_path
+    .exists()
+    .then(|| read_json_value(&local_path))
+    .transpose()?;
+
+  let merged = match (global_val, local_val) {
+    (Some(g), Some(l)) => merge_json_values(g, l),
+    (Some(g), None) => g,
+    (None, Some(l)) => l,
+    (None, None) => {
+      let global_hint = global_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "~/.ai-review/config.json".to_string());
+      anyhow::bail!(
+        "Конфиг не найден. Создайте файл `{global_hint}` в домашней директории \
+         или `{}` в текущей директории.",
+        local_path.display(),
+      );
     }
-  }
-
-  // 2. ./ai-review.json
-  let local = PathBuf::from(".ai-review/config.json");
-  if local.exists() {
-    return read_config(local);
-  }
-
-  // 3. ENV fallback
-  let api_url = std::env::var("AI_REVIEW_API_URL").context("Missing AI_REVIEW_API_URL")?;
-
-  let api_key = std::env::var("AI_REVIEW_API_KEY").context("Missing AI_REVIEW_API_KEY")?;
-
-  let model =
-    std::env::var("AI_REVIEW_MODEL").unwrap_or_else(|_| "anthropic/claude-3.5-sonnet".to_string());
-
-  let config = Config {
-    llm: LlmConfig {
-      api_url,
-      api_key,
-      model,
-      max_retry_count: default_max_retry_count(),
-      candidate_reviews_per_diff: default_candidate_reviews_per_diff(),
-      extra_body: Default::default(),
-    },
-    include: None,
-    exclude: None,
   };
+
+  let config: Config = serde_json::from_value(merged).context("Invalid config JSON")?;
 
   validate_config(&config)?;
   Ok(config)
 }
 
-fn read_config(path: PathBuf) -> Result<Config> {
-  let content = fs::read_to_string(&path).context(format!("Failed to read config {:?}", path))?;
+fn read_json_value(path: &Path) -> Result<Value> {
+  let content = fs::read_to_string(path).context(format!("Failed to read config {:?}", path))?;
+  serde_json::from_str(&content).context("Invalid config JSON")
+}
 
-  let config: Config = serde_json::from_str(&content).context("Invalid config JSON")?;
-
-  validate_config(&config)?;
-  Ok(config)
+fn merge_json_values(base: Value, overlay: Value) -> Value {
+  match (base, overlay) {
+    (Value::Object(mut base_map), Value::Object(overlay_map)) => {
+      for (k, v) in overlay_map {
+        let merged = match base_map.remove(&k) {
+          Some(bv) if bv.is_object() && v.is_object() => merge_json_values(bv, v),
+          _ => v,
+        };
+        base_map.insert(k, merged);
+      }
+      Value::Object(base_map)
+    }
+    (_, overlay) => overlay,
+  }
 }
 
 fn validate_config(config: &Config) -> Result<()> {
