@@ -76,8 +76,6 @@ pub fn load_config() -> Result<Config> {
   };
 
   let config: Config = serde_json::from_value(merged).context("Invalid config JSON")?;
-
-  validate_config(&config)?;
   Ok(config)
 }
 
@@ -100,13 +98,4 @@ fn merge_json_values(base: Value, overlay: Value) -> Value {
     }
     (_, overlay) => overlay,
   }
-}
-
-fn validate_config(config: &Config) -> Result<()> {
-  if config.include.is_some() && config.exclude.is_some() {
-    anyhow::bail!(
-      "В конфиге должен быть указан только один параметр: либо `include`, либо `exclude`."
-    );
-  }
-  Ok(())
 }

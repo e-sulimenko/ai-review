@@ -48,7 +48,8 @@ async fn main() -> Result<()> {
       "After include filter: {} file(s) to review.",
       file_diffs.len()
     ));
-  } else if let Some(exclude) = &config.exclude {
+  }
+  if let Some(exclude) = &config.exclude {
     file_diffs.retain(|fd| {
       !exclude.iter().any(|entry| path_matches_entry(&fd.path, entry))
     });
