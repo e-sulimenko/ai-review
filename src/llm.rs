@@ -1,8 +1,8 @@
-use crate::{config::LlmConfig, git::FileDiff, ui_log::UiLogger};
+use crate::{cache, config::LlmConfig, git::FileDiff, ui_log::UiLogger};
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt, time::Instant};
+use std::{collections::HashMap, fmt, path::Path, time::Instant};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -636,6 +636,7 @@ pub async fn review_files(
   config: &LlmConfig,
   diffs: &[FileDiff],
   logger: &UiLogger,
+  cache_root: Option<&Path>,
 ) -> Result<Vec<LlmReview>> {
   let max_concurrent = 5;
   let total_files = diffs.len();
@@ -663,12 +664,71 @@ pub async fn review_files(
   }
 
   let reviews: Vec<FileReview> = stream::iter(diffs.iter().enumerate())
-    .map(|(idx, file)| review_single_file(config, file, idx + 1, total_files, &client, logger))
+    .map(|(idx, file)| {
+      review_single_file_maybe_cached(
+        config,
+        file,
+        idx + 1,
+        total_files,
+        &client,
+        logger,
+        cache_root,
+      )
+    })
     .buffer_unordered(max_concurrent)
     .collect()
     .await;
 
   Ok(merge_reviews(reviews))
+}
+
+async fn review_single_file_maybe_cached(
+  config: &LlmConfig,
+  file: &FileDiff,
+  file_no: usize,
+  total_files: usize,
+  client: &reqwest::Client,
+  logger: &UiLogger,
+  cache_root: Option<&Path>,
+) -> FileReview {
+  if let Some(root) = cache_root {
+    let outcome = cache::read_cached_review(root, &file.path, &file.diff);
+    if let Some(msg) = outcome.diagnostic {
+      logger.warn(&msg);
+    }
+    if let Some(cached) = outcome.review {
+      logger.info(&format!(
+        "[{}/{}] {}: cache hit (same diff as stored review), skipping LLM.",
+        file_no, total_files, file.path
+      ));
+      return FileReview {
+        path: cached.path,
+        issues: cached.issues,
+        errors: cached.errors,
+      };
+    }
+  }
+
+  let review =
+    review_single_file(config, file, file_no, total_files, client, logger).await;
+
+  if let Some(root) = cache_root {
+    if review.errors.is_empty() {
+      let to_store = LlmReview {
+        path: review.path.clone(),
+        issues: review.issues.clone(),
+        errors: review.errors.clone(),
+      };
+      if let Err(e) = cache::write_cached_review(root, &file.path, &file.diff, &to_store) {
+        logger.warn(&format!(
+          "{}: could not save review to cache: {}",
+          file.path, e
+        ));
+      }
+    }
+  }
+
+  review
 }
 
 async fn review_single_file(
@@ -888,7 +948,7 @@ mod tests {
     };
     let client = reqwest::Client::new();
 
-    let file_review = review_single_file(&config, &file, 1, 1, &client, logger).await;
+    let file_review = review_single_file(&config, &file, 1, 1, &client, &logger).await;
 
     // Если случилась ошибка сети/авторизации — явно падаем.
     assert!(

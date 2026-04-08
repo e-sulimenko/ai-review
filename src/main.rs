@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+mod cache;
 mod cli;
 mod config;
 mod git;
@@ -75,8 +76,14 @@ async fn main() -> Result<()> {
     }
   }
 
-  // Отправляем файлы в LLM (MVP — фейковый ревью)
-  let reviews = llm::review_files(&config.llm, &file_diffs, &logger).await?;
+  // Отправляем файлы в LLM; при совпадении хеша диффа читаем сохранённое ревью.
+  let reviews = llm::review_files(
+    &config.llm,
+    &file_diffs,
+    &logger,
+    Some(cache::default_cache_dir()),
+  )
+  .await?;
   // Агрегируем ревью
   let summary = review::aggregate_reviews(&file_diffs, reviews);
 
