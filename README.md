@@ -6,11 +6,14 @@
 cargo build --release
 ```
 
-2. Запускаем MVP:
+2. Запускаем ревью (подкоманда `run`):
 
 ```bash
-cargo run
+cargo run -- run
 ```
+
+После `cargo build --release` то же самое из бинарника: `target/release/ai-review run`.
+Список всех подкоманд: `cargo run -- --help`.
 
 * По умолчанию вывод будет **человекочитаемый**:
 
@@ -35,7 +38,7 @@ Suggestion: Add /// comments above main
 1. **JSON вывод:**
 
 ```bash
-cargo run -- --json
+cargo run -- run --json
 ```
 
 Пример:
@@ -65,11 +68,36 @@ cargo run -- --json
 2. **Markdown отчет:**
 
 ```bash
-cargo run -- --md
+cargo run -- run --md
+```
+
+Другие флаги у `run`: `--debug`, `--no-cache`.
+
+---
+
+### 3. Команды CLI
+
+Подкоманда передаётся первым аргументом (после `cargo run --` — сразу имя подкоманды).
+
+| Команда | Назначение |
+|--------|------------|
+| `run` | Запуск ревью изменений в текущей ветке относительно git. Флаги: `--json`, `--md`, `--debug`, `--no-cache`. |
+| `clean-cache` | Удалить каталог кеша ответов LLM: `.ai-review/cache`. |
+| `clean-review` | Удалить каталог сохранённых markdown-отчётов: `.ai-review/reviews`. |
+| `clean` | Удалить оба каталога — и кеш, и отчёты. |
+
+Примеры:
+
+```bash
+cargo run -- clean-cache
+cargo run -- clean-review
+cargo run -- clean
+target/release/ai-review run --no-cache
 ```
 
 ---
-### 3. Конфиг LLM
+
+### 4. Конфиг LLM
 Файл конфигурации: `~/.ai-review/config.json` (или `./.ai-review/config.json`).
 
 В секции `llm` можно указать `extra_body` — любые дополнительные поля, которые будут добавлены в JSON body запроса к LLM на том же уровне, что и `model` и `messages`.

@@ -1,5 +1,5 @@
 use crate::review::ReviewSummary;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde_json;
 use std::{
   env,
@@ -7,6 +7,20 @@ use std::{
   path::{Path, PathBuf},
   time::{SystemTime, UNIX_EPOCH},
 };
+
+/// Каталог отчётов по умолчанию относительно cwd: `.ai-review/reviews`.
+pub fn default_reviews_dir() -> &'static Path {
+  Path::new(".ai-review/reviews")
+}
+
+/// Удаляет каталог с markdown-отчётами целиком, если он существует.
+pub fn clear_reviews_dir(reviews_root: &Path) -> Result<()> {
+  if reviews_root.exists() {
+    fs::remove_dir_all(reviews_root)
+      .map_err(|e| anyhow!("remove reviews dir {}: {e}", reviews_root.display()))?;
+  }
+  Ok(())
+}
 
 /// Вывод в консоль человекочитаемого формата
 pub fn print_readable(summary: &ReviewSummary) {
@@ -97,7 +111,7 @@ pub fn write_md_report(summary: &ReviewSummary) -> Result<PathBuf> {
   let file_name = format!("ai-review-{}.md", epoch);
 
   // Create relative to current working directory.
-  let report_dir = PathBuf::from(".ai-review").join("reviews");
+  let report_dir = default_reviews_dir().to_path_buf();
   fs::create_dir_all(&report_dir)?;
 
   let report_path = report_dir.join(file_name);

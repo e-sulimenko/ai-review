@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 /// CLI аргументы
 #[derive(Parser, Debug)]
@@ -8,6 +8,27 @@ use clap::Parser;
   about = "MVP AI Code Review CLI"
 )]
 pub struct Cli {
+  #[command(subcommand)]
+  pub command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+  /// Запустить ревью изменений в текущей ветке
+  Run(RunArgs),
+  /// Удалить каталог кеша ревью (`.ai-review/cache`)
+  #[command(name = "clean-cache")]
+  CleanCache,
+  /// Удалить каталог markdown-отчётов (`.ai-review/reviews`)
+  #[command(name = "clean-review")]
+  CleanReview,
+  /// Удалить и кеш, и каталог отчётов (`.ai-review/cache` и `.ai-review/reviews`)
+  Clean,
+}
+
+/// Аргументы подкоманды `run`
+#[derive(clap::Args, Debug)]
+pub struct RunArgs {
   /// Вывод в JSON
   #[arg(long)]
   pub json: bool,

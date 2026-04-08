@@ -1,4 +1,5 @@
 use anyhow::Result;
+use cli::{Command, RunArgs};
 
 mod cache;
 mod cli;
@@ -11,8 +12,73 @@ mod ui_log;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  // Парсим CLI через отдельный модуль
   let cli = cli::parse_cli();
+
+  match cli.command {
+    Command::CleanCache => {
+      let cache_root = cache::default_cache_dir();
+      let existed = cache_root.exists();
+      cache::clear_cache_dir(cache_root)?;
+      if existed {
+        eprintln!("Review cache cleared ({}).", cache_root.display());
+      } else {
+        eprintln!(
+          "No review cache at {} (nothing to remove).",
+          cache_root.display()
+        );
+      }
+      Ok(())
+    }
+    Command::CleanReview => {
+      let reviews_root = output::default_reviews_dir();
+      let existed = reviews_root.exists();
+      output::clear_reviews_dir(reviews_root)?;
+      if existed {
+        eprintln!("Review reports cleared ({}).", reviews_root.display());
+      } else {
+        eprintln!(
+          "No review reports at {} (nothing to remove).",
+          reviews_root.display()
+        );
+      }
+      Ok(())
+    }
+    Command::Clean => {
+      let cache_root = cache::default_cache_dir();
+      let reviews_root = output::default_reviews_dir();
+      let cache_existed = cache_root.exists();
+      let reviews_existed = reviews_root.exists();
+      cache::clear_cache_dir(cache_root)?;
+      output::clear_reviews_dir(reviews_root)?;
+      match (cache_existed, reviews_existed) {
+        (true, true) => eprintln!(
+          "Cleared review cache ({}) and reports ({}).",
+          cache_root.display(),
+          reviews_root.display()
+        ),
+        (true, false) => eprintln!(
+          "Cleared review cache ({}). No reports at {}.",
+          cache_root.display(),
+          reviews_root.display()
+        ),
+        (false, true) => eprintln!(
+          "Cleared reports ({}). No cache at {}.",
+          reviews_root.display(),
+          cache_root.display()
+        ),
+        (false, false) => eprintln!(
+          "Nothing to remove: neither {} nor {} exists.",
+          cache_root.display(),
+          reviews_root.display()
+        ),
+      }
+      Ok(())
+    }
+    Command::Run(run_args) => run_review(run_args).await,
+  }
+}
+
+async fn run_review(cli: RunArgs) -> Result<()> {
   let logger = ui_log::UiLogger::new(cli.json, cli.debug);
 
   logger.info("Starting AI code review...");

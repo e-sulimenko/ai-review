@@ -10,6 +10,15 @@ pub fn default_cache_dir() -> &'static Path {
   Path::new(".ai-review/cache")
 }
 
+/// Удаляет каталог кеша целиком, если он существует.
+pub fn clear_cache_dir(cache_root: &Path) -> anyhow::Result<()> {
+  if cache_root.exists() {
+    fs::remove_dir_all(cache_root)
+      .map_err(|e| anyhow!("remove review cache dir {}: {e}", cache_root.display()))?;
+  }
+  Ok(())
+}
+
 /// Канонизация пути ревью для стабильного имени файла кеша и поля `path` в записи.
 ///
 /// — обрезка пробелов по краям  
