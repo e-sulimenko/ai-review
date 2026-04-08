@@ -76,14 +76,12 @@ async fn main() -> Result<()> {
     }
   }
 
-  // Отправляем файлы в LLM; при совпадении хеша диффа читаем сохранённое ревью.
-  let reviews = llm::review_files(
-    &config.llm,
-    &file_diffs,
-    &logger,
-    Some(cache::default_cache_dir()),
-  )
-  .await?;
+  // Отправляем файлы в LLM; кеш можно отключить через --no-cache.
+  let cache_root = (!cli.no_cache).then_some(cache::default_cache_dir());
+  if cli.no_cache {
+    logger.info("Review cache disabled (--no-cache).");
+  }
+  let reviews = llm::review_files(&config.llm, &file_diffs, &logger, cache_root).await?;
   // Агрегируем ревью
   let summary = review::aggregate_reviews(&file_diffs, reviews);
 

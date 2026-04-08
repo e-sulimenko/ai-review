@@ -17,6 +17,9 @@ pub struct Cli {
   /// Enable verbose debug logs (for developers / advanced users).
   #[arg(long)]
   pub debug: bool,
+  /// Не использовать кеш ревью (не читать и не записывать).
+  #[arg(long = "no-cache")]
+  pub no_cache: bool,
 }
 
 /// Функция для парсинга аргументов
