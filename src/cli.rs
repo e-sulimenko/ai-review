@@ -14,6 +14,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+  /// Создать config.json (интерактивно или шаблон с --yes)
+  Init(InitArgs),
   /// Запустить ревью изменений в текущей ветке
   Run(RunArgs),
   /// Удалить каталог кеша ревью (`.ai-review/cache`)
@@ -24,6 +26,17 @@ pub enum Command {
   CleanReview,
   /// Удалить и кеш, и каталог отчётов (`.ai-review/cache` и `.ai-review/reviews`)
   Clean,
+}
+
+/// Аргументы подкоманды `init`
+#[derive(clap::Args, Debug)]
+pub struct InitArgs {
+  /// Без вопросов: записать шаблон с значениями по умолчанию (как у eslint --yes)
+  #[arg(long)]
+  pub yes: bool,
+  /// Записать конфиг в домашнюю директорию (~/.ai-review/config.json)
+  #[arg(long)]
+  pub global: bool,
 }
 
 /// Аргументы подкоманды `run`

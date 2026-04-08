@@ -40,12 +40,22 @@ pub struct LlmConfig {
   pub extra_body: Map<String, Value>,
 }
 
+/// Путь к глобальному конфигу: `~/.ai-review/config.json`.
+pub fn global_config_path() -> Option<PathBuf> {
+  dirs::home_dir().map(|h| h.join(".ai-review/config.json"))
+}
+
+/// Путь к локальному конфигу в текущей директории: `.ai-review/config.json`.
+pub fn local_config_path() -> PathBuf {
+  PathBuf::from(".ai-review/config.json")
+}
+
 /// Глобальный конфиг в домашней директории (`~/.ai-review/config.json`) и локальный в cwd
 /// (`.ai-review/config.json`) сливаются: локальные ключи перекрывают глобальные, вложенные объекты
 /// объединяются рекурсивно (как `git config` global + local).
 pub fn load_config() -> Result<Config> {
-  let global_path = dirs::home_dir().map(|h| h.join(".ai-review/config.json"));
-  let local_path = PathBuf::from(".ai-review/config.json");
+  let global_path = global_config_path();
+  let local_path = local_config_path();
 
   let global_val = global_path
     .as_ref()
@@ -68,9 +78,12 @@ pub fn load_config() -> Result<Config> {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "~/.ai-review/config.json".to_string());
       anyhow::bail!(
-        "Конфиг не найден. Создайте файл `{global_hint}` в домашней директории \
-         или `{}` в текущей директории.",
+        "Конфиг не найден: нет ни `{}`, ни `{}`.\n\
+         Запустите интерактивную настройку: `ai-review init` (файл в текущей директории) \
+         или `ai-review init --global` (в домашней папке).\n\
+         Шаблон без вопросов: `ai-review init --yes` / `ai-review init --yes --global`.",
         local_path.display(),
+        global_hint,
       );
     }
   };

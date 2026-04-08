@@ -1,9 +1,10 @@
 use anyhow::Result;
-use cli::{Command, RunArgs};
+use cli::{Command, InitArgs, RunArgs};
 
 mod cache;
 mod cli;
 mod config;
+mod init;
 mod git;
 mod llm;
 mod output;
@@ -74,6 +75,7 @@ async fn main() -> Result<()> {
       }
       Ok(())
     }
+    Command::Init(InitArgs { yes, global }) => init::run_init(yes, global),
     Command::Run(run_args) => run_review(run_args).await,
   }
 }
