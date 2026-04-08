@@ -639,6 +639,16 @@ pub async fn review_files(
 ) -> Result<Vec<LlmReview>> {
   let max_concurrent = 5;
   let total_files = diffs.len();
+  let client = reqwest::Client::builder()
+    // Включаем HTTP/2 (обычно включен по умолчанию, но явное указание помогает)
+    .http2_adaptive_window(true) // Увеличиваем окно потока для HTTP/2
+    .pool_max_idle_per_host(20)   // Храним больше свободных соединений в пуле
+    .pool_idle_timeout(Some(std::time::Duration::from_secs(90))) // Соединения живут 90 сек
+    // Таймауты:
+    .connect_timeout(std::time::Duration::from_secs(10)) // Макс. время на подключение
+    // .timeout(std::time::Duration::from_secs(120))       // Макс. время на весь ответ (скажем, 2 минуты)
+    .build()?;
+
   logger.info(&format!(
     "Starting LLM review for {} file(s) (max {} in parallel).",
     total_files, max_concurrent
@@ -653,7 +663,7 @@ pub async fn review_files(
   }
 
   let reviews: Vec<FileReview> = stream::iter(diffs.iter().enumerate())
-    .map(|(idx, file)| review_single_file(config, file, idx + 1, total_files, logger))
+    .map(|(idx, file)| review_single_file(config, file, idx + 1, total_files, &client, logger))
     .buffer_unordered(max_concurrent)
     .collect()
     .await;
@@ -666,9 +676,9 @@ async fn review_single_file(
   file: &FileDiff,
   file_no: usize,
   total_files: usize,
+  client: &reqwest::Client,
   logger: &UiLogger,
 ) -> FileReview {
-  let client = reqwest::Client::new();
   let prompt = build_prompt_single(file);
 
   logger.info(&format!(
@@ -876,8 +886,9 @@ mod tests {
       path: "src/main.rs".to_string(),
       diff: "fn main() { println!(\"hello\"); let x = 1; Ok(x) }".to_string(),
     };
+    let client = reqwest::Client::new();
 
-    let file_review = review_single_file(&config, &file, 1, 1, &logger).await;
+    let file_review = review_single_file(&config, &file, 1, 1, &client, logger).await;
 
     // Если случилась ошибка сети/авторизации — явно падаем.
     assert!(
