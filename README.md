@@ -8,6 +8,8 @@
 - печатает отчёт в консоль и/или сохраняет markdown-репорт,
 - умеет кешировать ответы и чистить артефакты.
 
+P.S. Изначально я делал этот проект для себя и личных задач. Буду развивать его постепенно, по мере времени и возможностей.
+
 ---
 
 ### Быстрый старт
@@ -66,6 +68,32 @@ cargo build --release
 ---
 
 ### Установка и удаление
+
+#### Установка из GitHub Releases (Linux x86_64)
+
+Если вы не хотите собирать из исходников, можно скачать готовый бинарник из GitHub Releases (например `ai-review_x86_64-linux-gnu`) и положить его в директорию из `PATH`.
+
+Пример (bash):
+
+```bash
+mkdir -p "$HOME/.local/bin"
+
+# 1) либо скачайте файл из релиза (замените URL на нужный asset)
+curl -L -o "$HOME/.local/bin/ai-review" "<ASSET_URL>"
+#
+# ... либо если файл уже скачан, переместите и переименуйте его:
+# mv ~/Downloads/ai-review_x86_64-linux-gnu "$HOME/.local/bin/ai-review"
+
+# 2) сделайте исполняемым
+chmod +x "$HOME/.local/bin/ai-review"
+
+# 3) добавьте в PATH (если ещё не добавлено)
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# 4) проверка
+ai-review --help
+```
 
 #### Установка (чтобы `ai-review` был в PATH)
 
