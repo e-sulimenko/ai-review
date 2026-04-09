@@ -61,9 +61,50 @@ pick_install_dir() {
   echo "${HOME}/.local/bin"
 }
 
+ensure_rust() {
+  if command -v cargo >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "==> Rust (cargo) not found."
+  echo "This project includes rust-toolchain.toml; the recommended setup is rustup."
+  echo
+  echo "Install Rust using rustup now?"
+  echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  echo
+  read -r -p "Proceed? [y/N]: " ans
+  ans="${ans:-}"
+  ans_lc="$(printf '%s' "${ans}" | tr '[:upper:]' '[:lower:]')"
+  case "${ans_lc}" in
+    y|yes) ;;
+    *) echo "Cancelled."; exit 1 ;;
+  esac
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "Error: curl is required to install rustup." >&2
+    exit 1
+  fi
+
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+  # Best effort: load cargo into current shell session.
+  if [[ -f "${HOME}/.cargo/env" ]]; then
+    # shellcheck disable=SC1090
+    source "${HOME}/.cargo/env"
+  fi
+
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Rust installation finished, but cargo is still not on PATH in this shell." >&2
+    echo "Restart your terminal (or source ~/.cargo/env), then re-run ./install.sh" >&2
+    exit 1
+  fi
+}
+
 INSTALL_DIR="$(pick_install_dir)"
 SRC_BIN="${ROOT_DIR}/target/release/${BIN_NAME}"
 DST_BIN="${INSTALL_DIR}/${BIN_NAME}"
+
+ensure_rust
 
 echo "==> Building ${BIN_NAME} (release)"
 cd "${ROOT_DIR}"
