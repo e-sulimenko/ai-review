@@ -1,12 +1,58 @@
-### 1. Компиляция и запуск
+### Мотивация
 
-1. Скомпилируем проект:
+Во многих корпоративных продуктах нет встроенных инструментов LLM-ревью (по типу GitLab Duo), а использовать публичные облачные модели нельзя. При этом часто доступны только **внутренние/закрытые LLM** или прокси с OpenAI-совместимым API.
+
+`ai-review` — небольшой CLI, который:
+- берёт текущие изменения из git,
+- отправляет диффы в LLM,
+- печатает отчёт в консоль и/или сохраняет markdown-репорт,
+- умеет кешировать ответы и чистить артефакты.
+
+---
+
+### Быстрый старт
+
+#### Вариант A: запуск без установки (из исходников)
+
+```bash
+cargo run -- init
+cargo run -- run
+```
+
+#### Вариант B: запуск после установки (команда `ai-review` в PATH)
+
+```bash
+./install.sh
+ai-review init
+ai-review run
+```
+
+Подсказка: полный список команд — `ai-review --help` (или `cargo run -- --help`).
+
+---
+
+### Dev и Prod режимы
+
+#### Dev (быстро править и запускать из исходников)
+
+```bash
+cargo run -- init
+cargo run -- run --debug
+```
+
+#### Prod (релизная сборка)
 
 ```bash
 cargo build --release
+./target/release/ai-review --help
+./target/release/ai-review run
 ```
 
-### 1.1 Установка (чтобы `ai-review` был в PATH)
+---
+
+### Установка и удаление
+
+#### Установка (чтобы `ai-review` был в PATH)
 
 Скрипт соберёт бинарник в release и установит его так, чтобы можно было вызывать `ai-review` из терминала.
 
@@ -21,116 +67,64 @@ cargo build --release
 ./install.sh --force                  # без вопроса перезапишет существующий бинарник
 ```
 
-2. Запускаем ревью (подкоманда `run`):
+Если выбранный каталог не в `PATH`, скрипт выведет строку, которую нужно добавить в профиль шелла (например, `~/.zshrc`).
+
+#### Удаление
 
 ```bash
-cargo run -- run
+./uninstall.sh
 ```
 
-После `cargo build --release` то же самое из бинарника: `target/release/ai-review run`.
-Список всех подкоманд: `cargo run -- --help`.
+Опционально:
 
-* По умолчанию вывод будет **человекочитаемый**:
-
-```
-================ AI Code Review ================
-Files changed: 3
-Lines changed: 45
-Issues found: 2
-Lines to fix: 2
-================================================
-
-src/main.rs
---------------------
-Line 1 [warning] Consider adding documentation for main function
-Suggestion: Add /// comments above main
+```bash
+./uninstall.sh --prefix "$HOME/.local"
+./uninstall.sh --force
 ```
 
 ---
 
-### 2. Дополнительные флаги
+### Конфигурация (`config.json`)
 
-1. **JSON вывод:**
+Поддерживаются **два** конфига (они **сливаются**):
+- **глобальный**: `~/.ai-review/config.json`
+- **локальный** (в текущей директории проекта): `.ai-review/config.json`
 
-```bash
-cargo run -- run --json
-```
+Если указаны оба, локальный **перекрывает** глобальный; вложенные объекты объединяются рекурсивно (как `git config`).
 
-Пример:
+#### Минимальный конфиг
 
 ```json
 {
-  "total_lines": 45,
-  "issues": 2,
-  "lines_to_fix": 2,
-  "files": [
-    {
-      "path": "src/main.rs",
-      "issues": [
-        {
-          "line": 1,
-          "severity": "warning",
-          "issue_type": "style",
-          "message": "Consider adding documentation for main function",
-          "suggestion": "Add /// comments above main"
-        }
-      ]
-    }
-  ]
+  "llm": {
+    "api_url": "https://openrouter.ai/api/v1/chat/completions",
+    "api_key": "YOUR_API_KEY",
+    "model": "openrouter/auto"
+  }
 }
 ```
 
-2. **Markdown отчет:**
+#### Поля конфига
 
-```bash
-cargo run -- run --md
-```
+- **`llm.api_url`** *(string, required)*: OpenAI-совместимый endpoint chat-completions.
+- **`llm.api_key`** *(string, required)*: ключ доступа. Хранится **в открытом виде** в файле.
+- **`llm.model`** *(string, required)*: идентификатор модели (формат зависит от вашего провайдера/прокси).
+- **`llm.max_retry_count`** *(number, optional, default=3)*: сколько раз повторять запрос, если LLM вернул невалидный JSON.
+- **`llm.candidate_reviews_per_diff`** *(number, optional, default=2)*: сколько «кандидатных» ревью генерировать на один diff-файл перед дедупликацией.
+- **`llm.extra_body`** *(object, optional)*: дополнительные поля, которые будут добавлены в JSON body запроса к LLM **на одном уровне** с `model` и `messages` (например `temperature`, `max_tokens`).
+- **`include`** *(array[string], optional)*: список путей/папок, которые нужно проверять.
+- **`exclude`** *(array[string], optional)*: список путей/папок, которые нужно исключить.
 
-Другие флаги у `run`: `--debug`, `--no-cache`.
+Семантика фильтров:
+- если указаны **оба**, сначала применяется `include`, потом из результата выкидывается `exclude`
+- можно указывать и файлы, и директории; поддерживаются варианты `src` и `src/`
 
----
+#### Пример расширенного конфига
 
-### 3. Команды CLI
-
-Подкоманда передаётся первым аргументом (после `cargo run --` — сразу имя подкоманды).
-
-| Команда | Назначение |
-|--------|------------|
-| `run` | Запуск ревью изменений в текущей ветке относительно git. Флаги: `--json`, `--md`, `--debug`, `--no-cache`. |
-| `clean-cache` | Удалить каталог кеша ответов LLM: `.ai-review/cache`. |
-| `clean-review` | Удалить каталог сохранённых markdown-отчётов: `.ai-review/reviews`. |
-| `clean` | Удалить оба каталога — и кеш, и отчёты. |
-
-Примеры:
-
-```bash
-cargo run -- clean-cache
-cargo run -- clean-review
-cargo run -- clean
-target/release/ai-review run --no-cache
-```
-
----
-
-### 4. Конфиг LLM
-Файл конфигурации: `~/.ai-review/config.json` (или `./.ai-review/config.json`).
-
-В секции `llm` можно указать `extra_body` — любые дополнительные поля, которые будут добавлены в JSON body запроса к LLM на том же уровне, что и `model` и `messages`.
-
-Также в корне конфигурации можно указать фильтрацию файлов:
-- `include`: список путей/папок, которые нужно проверять;
-- `exclude`: список путей/папок, которые нужно исключить из проверки.
-
-Если указаны оба, сначала остаются только пути из `include`, затем из них убираются совпадения с `exclude`. Можно указать только `include`, только `exclude` или оба.
-
-Также можно настроить поведение ретраев и количество candidate-ревью:
-- `max_retry_count` (по умолчанию `3`) — сколько раз повторять запрос, если LLM вернул невалидный JSON.
-- `candidate_reviews_per_diff` (по умолчанию `2`) — сколько candidate-ревью сгенерировать на один diff-файл перед дедупликацией.
-
-Пример:
 ```json
 {
   "include": ["src/", "README.md"],
+  "exclude": ["vendor/"],
   "llm": {
     "api_url": "https://openrouter.ai/api/v1/chat/completions",
     "api_key": "YOUR_API_KEY",
@@ -144,3 +138,26 @@ target/release/ai-review run --no-cache
   }
 }
 ```
+
+---
+
+### Команды
+
+Подкоманда передаётся первым аргументом.
+Если используете `cargo run`, синтаксис такой: `cargo run -- <команда> [флаги]`.
+
+- **`ai-review init`** — создать `config.json` (интерактивно).
+  - **`--global`**: записать в `~/.ai-review/config.json` (иначе — `.ai-review/config.json` в текущей директории).
+  - **`--yes`**: без вопросов записать шаблон (как `eslint init --yes`).
+
+- **`ai-review run`** — запустить ревью текущих изменений git.
+  - **`--json`**: вывести результат в JSON.
+  - **`--md`**: сохранить markdown-отчёт в `.ai-review/reviews` (и напечатать путь).
+  - **`--debug`**: подробные диагностические логи.
+  - **`--no-cache`**: не читать и не писать кеш ревью.
+
+- **`ai-review clean-cache`** — удалить кеш LLM-ответов: `.ai-review/cache`.
+
+- **`ai-review clean-review`** — удалить сохранённые markdown-отчёты: `.ai-review/reviews`.
+
+- **`ai-review clean`** — удалить и кеш, и отчёты.
