@@ -6,6 +6,21 @@
 cargo build --release
 ```
 
+### 1.1 Установка (чтобы `ai-review` был в PATH)
+
+Скрипт соберёт бинарник в release и установит его так, чтобы можно было вызывать `ai-review` из терминала.
+
+```bash
+./install.sh
+```
+
+Опционально:
+
+```bash
+./install.sh --prefix "$HOME/.local"   # установит в $HOME/.local/bin
+./install.sh --force                  # без вопроса перезапишет существующий бинарник
+```
+
 2. Запускаем ревью (подкоманда `run`):
 
 ```bash
